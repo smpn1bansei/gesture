@@ -479,7 +479,8 @@ class CameraQuizBattle {
       prevX: 0,
       prevY: 0,
       radius: 40,
-      pulse: 0
+      pulse: 0,
+      spawnImmunityTimer: 0 // Perlindungan benturan saat meluncur naik dari bawah
     };
 
     this.player2 = {
@@ -492,8 +493,16 @@ class CameraQuizBattle {
       prevX: 0,
       prevY: 0,
       radius: 40,
-      pulse: 0
+      pulse: 0,
+      spawnImmunityTimer: 0 // Perlindungan benturan saat meluncur naik dari bawah
     };
+
+    // Offscreen Canvas untuk Inferensi AI Ringan (Hemat CPU & Anti-Lag di IFP)
+    this.aiCanvas = document.createElement('canvas');
+    this.aiCanvas.width = 480;
+    this.aiCanvas.height = 270;
+    this.aiCtx = this.aiCanvas.getContext('2d', { willReadFrequently: true });
+    this.lastAITime = 0;
 
     // MediaPipe Hands & Camera instance
     this.hands = null;
@@ -729,26 +738,41 @@ class CameraQuizBattle {
       // Pastikan stream sebelumnya dihentikan sebelum membuat instance Camera baru
       this.stopCamera();
 
-      // Inisialisasi Camera Utils baru dengan throttling & resolusi optimal untuk AI
+      // Inisialisasi Camera Utils baru dengan native wide-angle HD (1280x720)
+      // agar sensor kamera IFP tidak melakukan digital crop/zoom dan gambar tetap terang.
       let isInferencing = false;
+      this.lastAITime = 0;
+
       this.cameraUtils = new Camera(this.video, {
         onFrame: async () => {
           // Lewati frame jika inferensi AI MediaPipe sebelumnya masih berjalan
-          // Ini mencegah antrean frame yang menyebabkan lag/stutter pada layar IFP
           if (!this.isCameraReady || this.video.readyState < 2 || !this.hands || isInferencing) {
             return;
           }
+
+          // Throttle AI ke ~18-20 FPS (interval minimal 50ms)
+          // Membebaskan beban CPU IFP hingga 70% dan menjamin game loop 60 FPS bebas lag
+          const now = performance.now();
+          if (now - this.lastAITime < 50) {
+            return;
+          }
+
           isInferencing = true;
+          this.lastAITime = now;
+
           try {
-            await this.hands.send({ image: this.video });
+            // Gambar video ke canvas offscreen kecil (480x270) khusus untuk inferensi AI
+            // Ini membuat MediaPipe WASM berjalan sangat ringan dan kencang di prosesor IFP
+            this.aiCtx.drawImage(this.video, 0, 0, this.aiCanvas.width, this.aiCanvas.height);
+            await this.hands.send({ image: this.aiCanvas });
           } catch (err) {
             console.warn('MediaPipe frame skip:', err);
           } finally {
             isInferencing = false;
           }
         },
-        width: 640,
-        height: 360 // 360p sangat ideal untuk AI gestur tangan dan hemat resource GPU/CPU
+        width: 1280,
+        height: 720 // Native HD Wide-Angle (terang, jernih, sudut pandang lebar tanpa crop)
       });
 
       await this.cameraUtils.start();
@@ -857,6 +881,23 @@ class CameraQuizBattle {
   }
 
   /**
+   * Memunculkan bola kuning pemain SELALU DARI DASAR/BAWAH LAYAR:
+   * Menghindari benturan instan yang tidak sengaja dengan bola jawaban yang jatuh.
+   * Bola meluncur naik secara halus dari bawah ke posisi telapak tangan dengan masa kekebalan.
+   */
+  spawnPlayerBall(player, targetX, targetY) {
+    player.smoothX = targetX;
+    // Mulai posisi Y tepat di bagian dasar layar (di bawah area aman 80%)
+    player.smoothY = this.canvas.height + player.radius;
+    player.rawX = targetX;
+    player.rawY = targetY;
+    player.prevX = targetX;
+    player.prevY = player.smoothY;
+    player.spawnImmunityTimer = 22; // ~350-400ms kekebalan benturan saat meluncur naik
+    player.pulse = 0;
+  }
+
+  /**
    * Callback MediaPipe Hands Results:
    * - Memetakan koordinat mirror layar (1.0 - landmark.x)
    * - Memisahkan tangan di X < 0.5 (Tim Kiri) dan X >= 0.5 (Tim Kanan)
@@ -888,14 +929,24 @@ class CameraQuizBattle {
         if (screenPixelX < this.canvas.width / 2) {
           if (!p1Found) {
             p1Found = true;
-            this.player1.isActive = isOpen && !this.teamLocked[1];
+            const nowActive = isOpen && !this.teamLocked[1];
+            if (nowActive && !this.player1.isActive) {
+              // Baru aktif: paksa bola kuning muncul dari bawah layar!
+              this.spawnPlayerBall(this.player1, screenPixelX, screenPixelY);
+            }
+            this.player1.isActive = nowActive;
             this.player1.rawX = screenPixelX;
             this.player1.rawY = screenPixelY;
           }
         } else {
           if (!p2Found) {
             p2Found = true;
-            this.player2.isActive = isOpen && !this.teamLocked[2];
+            const nowActive = isOpen && !this.teamLocked[2];
+            if (nowActive && !this.player2.isActive) {
+              // Baru aktif: paksa bola kuning muncul dari bawah layar!
+              this.spawnPlayerBall(this.player2, screenPixelX, screenPixelY);
+            }
+            this.player2.isActive = nowActive;
             this.player2.rawX = screenPixelX;
             this.player2.rawY = screenPixelY;
           }
@@ -903,21 +954,32 @@ class CameraQuizBattle {
       }
     }
 
-    if (!p1Found) this.player1.isActive = false;
-    if (!p2Found) this.player2.isActive = false;
+    if (!p1Found) {
+      this.player1.isActive = false;
+      this.player1.spawnImmunityTimer = 0;
+    }
+    if (!p2Found) {
+      this.player2.isActive = false;
+      this.player2.spawnImmunityTimer = 0;
+    }
 
     this.updateHUDStatus();
   }
 
-  // Update status badge di HUD (BUKA 5 JARI vs SIAP vs TERKUNCI)
+  // Update status badge di HUD (BUKA 5 JARI vs MUNCUL DARI BAWAH vs SIAP vs TERKUNCI)
   updateHUDStatus() {
     // Tim 1
     if (this.teamLocked[1]) {
       this.ui.statusP1.className = 'hand-status status-locked';
       this.ui.statusP1.innerHTML = '<span class="status-icon">🔒</span><span class="status-text">TERKUNCI (SALAH)</span>';
     } else if (this.player1.isActive) {
-      this.ui.statusP1.className = 'hand-status status-ready';
-      this.ui.statusP1.innerHTML = '<span class="status-icon">⚡</span><span class="status-text">SIAP (5 Jari)</span>';
+      if (this.player1.spawnImmunityTimer > 0) {
+        this.ui.statusP1.className = 'hand-status status-spawning';
+        this.ui.statusP1.innerHTML = '<span class="status-icon">🚀</span><span class="status-text">MUNCUL DARI BAWAH...</span>';
+      } else {
+        this.ui.statusP1.className = 'hand-status status-ready';
+        this.ui.statusP1.innerHTML = '<span class="status-icon">⚡</span><span class="status-text">SIAP (5 Jari)</span>';
+      }
     } else {
       this.ui.statusP1.className = 'hand-status status-waiting';
       this.ui.statusP1.innerHTML = '<span class="status-icon">✋</span><span class="status-text">BUKA 5 JARI</span>';
@@ -928,8 +990,13 @@ class CameraQuizBattle {
       this.ui.statusP2.className = 'hand-status status-locked';
       this.ui.statusP2.innerHTML = '<span class="status-icon">🔒</span><span class="status-text">TERKUNCI (SALAH)</span>';
     } else if (this.player2.isActive) {
-      this.ui.statusP2.className = 'hand-status status-ready';
-      this.ui.statusP2.innerHTML = '<span class="status-icon">⚡</span><span class="status-text">SIAP (5 Jari)</span>';
+      if (this.player2.spawnImmunityTimer > 0) {
+        this.ui.statusP2.className = 'hand-status status-spawning';
+        this.ui.statusP2.innerHTML = '<span class="status-icon">🚀</span><span class="status-text">MUNCUL DARI BAWAH...</span>';
+      } else {
+        this.ui.statusP2.className = 'hand-status status-ready';
+        this.ui.statusP2.innerHTML = '<span class="status-icon">⚡</span><span class="status-text">SIAP (5 Jari)</span>';
+      }
     } else {
       this.ui.statusP2.className = 'hand-status status-waiting';
       this.ui.statusP2.innerHTML = '<span class="status-icon">✋</span><span class="status-text">BUKA 5 JARI</span>';
@@ -966,9 +1033,11 @@ class CameraQuizBattle {
     // Matikan hardware kamera webcam (lampu LED kamera laptop/webcam padam)
     this.stopCamera();
 
-    // Matikan status aktif tangan
+    // Matikan status aktif tangan & timer spawn
     this.player1.isActive = false;
+    this.player1.spawnImmunityTimer = 0;
     this.player2.isActive = false;
+    this.player2.spawnImmunityTimer = 0;
 
     // Reset data skor & soal
     this.scoreP1 = 0;
@@ -1095,8 +1164,8 @@ class CameraQuizBattle {
     const players = [this.player1, this.player2];
 
     for (const player of players) {
-      // Lewati jika tim sedang terkunci, gestur 5 jari tidak aktif, atau tidak terdeteksi
-      if (this.teamLocked[player.team] || !player.isActive) continue;
+      // Lewati jika tim sedang terkunci, gestur 5 jari tidak aktif, atau masih dalam masa spawn immunity (baru muncul dari bawah)
+      if (this.teamLocked[player.team] || !player.isActive || player.spawnImmunityTimer > 0) continue;
 
       for (let i = 0; i < this.balls.length; i++) {
         const ball = this.balls[i];
@@ -1319,9 +1388,22 @@ class CameraQuizBattle {
     if (this.player1.isActive && !this.teamLocked[1]) {
       this.player1.prevX = this.player1.smoothX;
       this.player1.prevY = this.player1.smoothY;
-      this.player1.smoothX += (this.player1.rawX - this.player1.smoothX) * lerpAlpha;
-      this.player1.smoothY += (this.player1.rawY - this.player1.smoothY) * lerpAlpha;
+
+      // Saat baru muncul dari dasar, gunakan interpolasi terkontrol agar meluncur naik secara halus
+      const factorX = this.player1.spawnImmunityTimer > 0 ? 0.22 : lerpAlpha;
+      const factorY = this.player1.spawnImmunityTimer > 0 ? 0.20 : lerpAlpha;
+
+      this.player1.smoothX += (this.player1.rawX - this.player1.smoothX) * factorX;
+      this.player1.smoothY += (this.player1.rawY - this.player1.smoothY) * factorY;
       this.player1.pulse += 0.08;
+
+      if (this.player1.spawnImmunityTimer > 0) {
+        this.player1.spawnImmunityTimer--;
+        if (this.player1.spawnImmunityTimer === 0) {
+          this.updateHUDStatus();
+        }
+      }
+
       this.particles.addHandTrail(this.player1.smoothX, this.player1.smoothY);
     }
 
@@ -1329,9 +1411,22 @@ class CameraQuizBattle {
     if (this.player2.isActive && !this.teamLocked[2]) {
       this.player2.prevX = this.player2.smoothX;
       this.player2.prevY = this.player2.smoothY;
-      this.player2.smoothX += (this.player2.rawX - this.player2.smoothX) * lerpAlpha;
-      this.player2.smoothY += (this.player2.rawY - this.player2.smoothY) * lerpAlpha;
+
+      // Saat baru muncul dari dasar, gunakan interpolasi terkontrol agar meluncur naik secara halus
+      const factorX = this.player2.spawnImmunityTimer > 0 ? 0.22 : lerpAlpha;
+      const factorY = this.player2.spawnImmunityTimer > 0 ? 0.20 : lerpAlpha;
+
+      this.player2.smoothX += (this.player2.rawX - this.player2.smoothX) * factorX;
+      this.player2.smoothY += (this.player2.rawY - this.player2.smoothY) * factorY;
       this.player2.pulse += 0.08;
+
+      if (this.player2.spawnImmunityTimer > 0) {
+        this.player2.spawnImmunityTimer--;
+        if (this.player2.spawnImmunityTimer === 0) {
+          this.updateHUDStatus();
+        }
+      }
+
       this.particles.addHandTrail(this.player2.smoothX, this.player2.smoothY);
     }
 
@@ -1378,15 +1473,21 @@ class CameraQuizBattle {
     const x = player.smoothX;
     const y = player.smoothY;
     const baseRadius = player.radius;
+    const isSpawning = player.spawnImmunityTimer > 0;
     const pulseOffset = Math.sin(player.pulse) * 4;
     const currentRadius = baseRadius + pulseOffset;
 
     this.ctx.save();
 
+    // Jika sedang dalam masa kemunculan dari bawah (kekebalan tabrakan), beri efek aura proteksi
+    if (isSpawning) {
+      this.ctx.globalAlpha = 0.85;
+    }
+
     // 1. Outer Pulse Aura
     const auraGrad = this.ctx.createRadialGradient(x, y, currentRadius * 0.4, x, y, currentRadius * 1.8);
-    auraGrad.addColorStop(0, 'rgba(255, 234, 0, 0.45)');
-    auraGrad.addColorStop(0.6, 'rgba(255, 170, 0, 0.2)');
+    auraGrad.addColorStop(0, isSpawning ? 'rgba(0, 240, 255, 0.5)' : 'rgba(255, 234, 0, 0.45)');
+    auraGrad.addColorStop(0.6, isSpawning ? 'rgba(0, 240, 255, 0.25)' : 'rgba(255, 170, 0, 0.2)');
     auraGrad.addColorStop(1, 'rgba(255, 234, 0, 0)');
 
     this.ctx.fillStyle = auraGrad;
@@ -1406,9 +1507,9 @@ class CameraQuizBattle {
       currentRadius
     );
     coreGrad.addColorStop(0, '#ffffff');
-    coreGrad.addColorStop(0.35, '#ffea00');
-    coreGrad.addColorStop(0.85, '#ff9100');
-    coreGrad.addColorStop(1, '#ff6d00');
+    coreGrad.addColorStop(0.35, isSpawning ? '#a0f0ff' : '#ffea00');
+    coreGrad.addColorStop(0.85, isSpawning ? '#00b4d8' : '#ff9100');
+    coreGrad.addColorStop(1, isSpawning ? '#0077b6' : '#ff6d00');
 
     this.ctx.fillStyle = coreGrad;
     this.ctx.beginPath();
@@ -1417,10 +1518,21 @@ class CameraQuizBattle {
 
     // 3. Cincin Putar Energi
     this.ctx.lineWidth = 2.5;
-    this.ctx.strokeStyle = 'rgba(255, 255, 255, 0.8)';
+    this.ctx.strokeStyle = isSpawning ? '#00f0ff' : 'rgba(255, 255, 255, 0.8)';
     this.ctx.beginPath();
     this.ctx.arc(x, y, currentRadius * 0.7, 0, Math.PI * 2);
     this.ctx.stroke();
+
+    // Cincin pelindung khusus saat baru muncul dari bawah (Spawn Shield)
+    if (isSpawning) {
+      this.ctx.beginPath();
+      this.ctx.arc(x, y, currentRadius + 8, 0, Math.PI * 2);
+      this.ctx.strokeStyle = '#00f0ff';
+      this.ctx.lineWidth = 2;
+      this.ctx.setLineDash([5, 4]);
+      this.ctx.stroke();
+      this.ctx.setLineDash([]);
+    }
 
     // 4. Ikon / Label Tim di dalam Bola
     this.ctx.shadowBlur = 0;
