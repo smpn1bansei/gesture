@@ -435,11 +435,11 @@ html, body {
   box-shadow: 0 0 10px rgba(0, 255, 136, 0.3);
 }
 
-.status-spawning {
-  background: rgba(0, 240, 255, 0.2);
-  border: 1px solid #00f0ff;
+.status-falling {
+  background: rgba(0, 240, 255, 0.16);
+  border: 1px dashed #00f0ff;
   color: #00f0ff;
-  box-shadow: 0 0 10px rgba(0, 240, 255, 0.4);
+  animation: pulseWait 1.4s infinite;
 }
 
 .status-locked {
