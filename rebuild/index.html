@@ -41,8 +41,23 @@
 
     <footer>
       <span id="camera-status" class="camera-status">● MENYIAPKAN KAMERA</span>
-      <button id="fullscreen" type="button">⛶ LAYAR PENUH</button>
+      <div class="footer-actions">
+        <button id="reset-button" type="button">↺ MULAI ULANG</button>
+        <button id="fullscreen" type="button">⛶ LAYAR PENUH</button>
+      </div>
     </footer>
+
+    <div id="reset-modal" class="message hidden">
+      <div>
+        <small>KONFIRMASI</small>
+        <h2>MULAI ULANG?</h2>
+        <p>Skor dan ronde kuis akan diatur ulang dari awal.</p>
+        <div style="display:flex; gap:12px; justify-content:center; margin-top:20px;">
+          <button id="cancel-reset" type="button" style="background:#40536d;">BATAL</button>
+          <button id="confirm-reset" type="button" style="background:#d83232;">YA, MULAI ULANG</button>
+        </div>
+      </div>
+    </div>
 
     <div id="message" class="message hidden"><div><small id="message-kicker">RONDE SELESAI</small><h2 id="message-title"></h2><p id="message-detail"></p><button id="message-button" class="hidden" type="button">MAIN LAGI</button></div></div>
     <div id="start" class="start-screen"><div class="start-card">

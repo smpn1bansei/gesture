@@ -4,6 +4,45 @@ const VISION_BUNDLE = 'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10
 const VISION_WASM = 'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.21/wasm';
 const HAND_MODEL = 'https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task';
 
+class Sound {
+  constructor() { this.ctx = null; }
+  init() {
+    if (!this.ctx) {
+      const AudioCtx = window.AudioContext || window.webkitAudioContext;
+      if (AudioCtx) this.ctx = new AudioCtx();
+    }
+    if (this.ctx && this.ctx.state === 'suspended') this.ctx.resume();
+  }
+  playCorrect() {
+    this.init(); if (!this.ctx) return;
+    const now = this.ctx.currentTime;
+    [523.25, 659.25, 783.99, 1046.5].forEach((freq, idx) => {
+      const osc = this.ctx.createOscillator();
+      const gain = this.ctx.createGain();
+      osc.type = 'triangle';
+      osc.frequency.setValueAtTime(freq, now + idx * 0.08);
+      gain.gain.setValueAtTime(0, now + idx * 0.08);
+      gain.gain.linearRampToValueAtTime(0.2, now + idx * 0.08 + 0.02);
+      gain.gain.exponentialRampToValueAtTime(0.001, now + idx * 0.08 + 0.35);
+      osc.connect(gain); gain.connect(this.ctx.destination);
+      osc.start(now + idx * 0.08); osc.stop(now + idx * 0.08 + 0.38);
+    });
+  }
+  playWrong() {
+    this.init(); if (!this.ctx) return;
+    const now = this.ctx.currentTime;
+    const osc = this.ctx.createOscillator();
+    const gain = this.ctx.createGain();
+    osc.type = 'sawtooth';
+    osc.frequency.setValueAtTime(115, now);
+    osc.frequency.exponentialRampToValueAtTime(65, now + 0.4);
+    gain.gain.setValueAtTime(0.25, now);
+    gain.gain.exponentialRampToValueAtTime(0.001, now + 0.42);
+    osc.connect(gain); gain.connect(this.ctx.destination);
+    osc.start(now); osc.stop(now + 0.44);
+  }
+}
+
 class AnswerBall {
   constructor(team, index, text, correct, x, y) {
     this.team = team;
@@ -99,9 +138,10 @@ class MathMotionBattle {
     this.trackerBusy = false;
     this.tracker = null;
     this.mainThreadDetector = null;
+    this.sound = new Sound();
     this.aiCanvas = document.createElement('canvas');
-    this.aiCanvas.width = 320;
-    this.aiCanvas.height = 180;
+    this.aiCanvas.width = 480;
+    this.aiCanvas.height = 270;
     this.aiCtx = this.aiCanvas.getContext('2d', { willReadFrequently: true });
     this.players = [this.createPlayer(1), this.createPlayer(2)];
     this.ui = {
@@ -112,11 +152,31 @@ class MathMotionBattle {
       locks: [document.querySelector('#lock-1'), document.querySelector('#lock-2')],
       status: document.querySelector('#camera-status'), message: document.querySelector('#message'),
       messageKicker: document.querySelector('#message-kicker'), messageTitle: document.querySelector('#message-title'),
-      messageDetail: document.querySelector('#message-detail'), messageButton: document.querySelector('#message-button')
+      messageDetail: document.querySelector('#message-detail'), messageButton: document.querySelector('#message-button'),
+      resetButton: document.querySelector('#reset-button'), resetModal: document.querySelector('#reset-modal'),
+      cancelReset: document.querySelector('#cancel-reset'), confirmReset: document.querySelector('#confirm-reset')
     };
     this.resize();
     addEventListener('resize', () => this.resize());
     document.querySelector('#fullscreen').addEventListener('click', () => this.fullscreen());
+    if (this.ui.resetButton) {
+      this.ui.resetButton.addEventListener('click', () => {
+        this.ui.resetModal.classList.remove('hidden');
+      });
+    }
+    if (this.ui.cancelReset) {
+      this.ui.cancelReset.addEventListener('click', () => {
+        this.ui.resetModal.classList.add('hidden');
+      });
+    }
+    if (this.ui.confirmReset) {
+      this.ui.confirmReset.addEventListener('click', () => {
+        this.ui.resetModal.classList.add('hidden');
+        this.ui.message.classList.add('hidden');
+        this.scores = [0, 0];
+        this.startRound(0);
+      });
+    }
     this.ui.startButton.addEventListener('click', () => this.start());
     this.ui.messageButton.addEventListener('click', () => {
       this.scores = [0, 0];
@@ -206,9 +266,9 @@ class MathMotionBattle {
       baseOptions: { modelAssetPath: HAND_MODEL },
       runningMode: 'VIDEO',
       numHands: 2,
-      minHandDetectionConfidence: 0.55,
-      minHandPresenceConfidence: 0.55,
-      minTrackingConfidence: 0.65
+      minHandDetectionConfidence: 0.40,
+      minHandPresenceConfidence: 0.40,
+      minTrackingConfidence: 0.45
     });
     this.trackerReady = true;
   }
@@ -226,7 +286,7 @@ class MathMotionBattle {
         this.trackerBusy = false;
         return;
       }
-      const frame = await createImageBitmap(this.video, { resizeWidth: 320, resizeHeight: 180, resizeQuality: 'low' });
+      const frame = await createImageBitmap(this.video, { resizeWidth: 480, resizeHeight: 270, resizeQuality: 'medium' });
       this.tracker.postMessage({ type: 'frame', frame, timestamp: performance.now() }, [frame]);
     } catch (error) {
       console.warn('Frame pelacak dilewati.', error);
@@ -264,14 +324,20 @@ class MathMotionBattle {
 
   isIndexFinger(points) {
     const wrist = points[0]; const palm = points[9];
-    const distance = (i) => Math.hypot(points[i].x - wrist.x, points[i].y - wrist.y);
-    const scale = distance(9); if (scale < .01) return false;
-    // Ambang telunjuk dibuat ramah untuk tangan yang tidak benar-benar tegak
-    // menghadap kamera. Jari lain baru dianggap terbuka jika terlihat jelas,
-    // sehingga gerakan alami tidak mematikan kontrol secara mendadak.
-    const indexRaised = distance(8) > distance(6) + scale * .12 && distance(8) > scale * 1.28;
-    const otherClearlyRaised = (tip, pip) => distance(tip) > distance(pip) + scale * .34 && distance(tip) > scale * 1.60;
-    return indexRaised && !otherClearlyRaised(12, 10) && !otherClearlyRaised(16, 14) && !otherClearlyRaised(20, 18);
+    // Jarak 3D Euclidean (tahan terhadap pemendekan 2D / foreshortening saat jari menunjuk ke arah layar)
+    const dist3D = (i) => Math.hypot(
+      points[i].x - wrist.x,
+      points[i].y - wrist.y,
+      (points[i].z || 0) - (wrist.z || 0)
+    );
+    const scale = dist3D(9); if (scale < .01) return false;
+    // Jari telunjuk (8) terulur menjauhi pergelangan dan melebihi sendi PIP (6)
+    const indexRaised = dist3D(8) > dist3D(6) * 1.08 && dist3D(8) > scale * 1.15;
+    // Jari-jari lain (tengah 12, manis 16, kelingking 20) tertekuk / tidak teracung melebihi telunjuk
+    const middleFolded = dist3D(12) < dist3D(8) * 0.94 || dist3D(12) < dist3D(10) * 1.05;
+    const ringFolded = dist3D(16) < dist3D(8) * 0.90;
+    const pinkyFolded = dist3D(20) < dist3D(8) * 0.90;
+    return indexRaised && middleFolded && ringFolded && pinkyFolded;
   }
 
   videoBounds() {
@@ -327,21 +393,46 @@ class MathMotionBattle {
     }
   }
 
-  correct(team) { this.roundEnded = true; this.scores[team] += 10; this.showMessage('JAWABAN BENAR', `TIM ${team + 1} MENDAPAT +10 POIN`, 'Soal berikutnya segera dimulai.'); setTimeout(() => { this.ui.message.classList.add('hidden'); this.startRound(this.questionIndex + 1); }, 1900); }
+  correct(team) {
+    this.roundEnded = true;
+    this.scores[team] += 10;
+    this.sound.playCorrect();
+    this.showMessage('RONDE SELESAI', `TIM ${team + 1} BENAR!`, '+10 Poin berhasil diraih! Soal berikutnya segera dimulai.');
+    setTimeout(() => {
+      this.ui.message.classList.add('hidden');
+      this.startRound(this.questionIndex + 1);
+    }, 1900);
+  }
+
   wrong(team, ball) {
     ball.locked = true;
     this.locked[team] = true;
     this.balls.filter((item) => item.team === team + 1).forEach((item) => { item.locked = true; });
     this.ui.locks[team].classList.remove('hidden');
+    this.sound.playWrong();
     if (this.locked[0] && this.locked[1]) {
       this.roundEnded = true;
       const q = this.questions[this.questionIndex];
-      this.showMessage('KEDUA TIM SALAH', `Jawaban yang benar: ${OPTIONS[q.answer]} — ${q.options[q.answer]}`, 'Soal berikutnya segera dimulai.');
-      setTimeout(() => { this.ui.message.classList.add('hidden'); this.startRound(this.questionIndex + 1); }, 2100);
+      this.showMessage('RONDE BERAKHIR', 'KEDUA TIM SALAH', `Jawaban yang benar: ${OPTIONS[q.answer]} — ${q.options[q.answer]}`);
+      setTimeout(() => {
+        this.ui.message.classList.add('hidden');
+        this.startRound(this.questionIndex + 1);
+      }, 2200);
     }
   }
-  finishGame() { const winner = this.scores[0] === this.scores[1] ? 'PERTANDINGAN SERI' : this.scores[0] > this.scores[1] ? 'TIM BIRU MENANG!' : 'TIM ORANYE MENANG!'; this.showMessage('10 SOAL SELESAI', winner, `Skor akhir: Biru ${this.scores[0]} — ${this.scores[1]} Oranye`, true); }
-  showMessage(title, detail, kicker, final = false) { this.ui.messageTitle.textContent = title; this.ui.messageDetail.textContent = detail; this.ui.messageKicker.textContent = kicker; this.ui.message.classList.remove('hidden'); this.ui.messageButton.classList.toggle('hidden', !final); }
+
+  finishGame() {
+    const winner = this.scores[0] === this.scores[1] ? 'PERTANDINGAN SERI!' : this.scores[0] > this.scores[1] ? '🏆 TIM BIRU MENANG!' : '🏆 TIM ORANYE MENANG!';
+    this.showMessage('PERMAINAN SELESAI', winner, `Skor akhir: Biru ${this.scores[0]} — ${this.scores[1]} Oranye`, true);
+  }
+
+  showMessage(kicker, title, detail, final = false) {
+    this.ui.messageKicker.textContent = kicker;
+    this.ui.messageTitle.textContent = title;
+    this.ui.messageDetail.textContent = detail;
+    this.ui.message.classList.remove('hidden');
+    this.ui.messageButton.classList.toggle('hidden', !final);
+  }
   updateHud() { this.players.forEach((player, i) => { this.ui.scores[i].textContent = this.scores[i]; this.ui.states[i].textContent = this.locked[i] ? '🔒 TERKUNCI' : player.controlled ? '⚡ MENGGERAKKAN BOLA' : '☝️ ANGKAT TELUNJUK'; }); }
   draw() { const { ctx, canvas } = this; ctx.clearRect(0, 0, canvas.width, canvas.height); this.balls.forEach((ball) => ball.draw(ctx)); this.players.forEach((player, i) => this.drawPlayer(player, this.locked[i])); }
   drawPlayer(player, locked) { const { ctx } = this, r = player.radius, x = player.x, y = player.y; ctx.save(); ctx.globalAlpha = locked ? .26 : 1; const halo = ctx.createRadialGradient(x, y, r * .25, x, y, r * 1.8); halo.addColorStop(0, player.controlled ? 'rgba(255,239,80,.72)' : 'rgba(255,227,75,.38)'); halo.addColorStop(1, 'rgba(255,227,75,0)'); ctx.fillStyle = halo; ctx.beginPath(); ctx.arc(x, y, r * 1.8, 0, Math.PI * 2); ctx.fill(); const core = ctx.createRadialGradient(x - r*.3, y-r*.3, 2, x, y, r); core.addColorStop(0,'#fff'); core.addColorStop(.3,'#fff79b'); core.addColorStop(.8,'#ffc21c'); core.addColorStop(1,'#d86b00'); ctx.fillStyle=core; ctx.beginPath();ctx.arc(x,y,r,0,Math.PI*2);ctx.fill();ctx.strokeStyle='#fff';ctx.lineWidth=2;ctx.stroke();ctx.fillStyle='#18202b';ctx.font='800 12px Oxanium,sans-serif';ctx.textAlign='center';ctx.textBaseline='middle';ctx.fillText(locked?'🔒':`P${player.team}`,x,y);ctx.restore(); }

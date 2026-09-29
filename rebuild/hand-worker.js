@@ -12,18 +12,22 @@ self.onmessage = async ({ data }) => {
         baseOptions: { modelAssetPath: MODEL_URL },
         runningMode: 'VIDEO',
         numHands: 2,
-        minHandDetectionConfidence: 0.55,
-        minHandPresenceConfidence: 0.55,
-        minTrackingConfidence: 0.65
+        minHandDetectionConfidence: 0.40,
+        minHandPresenceConfidence: 0.40,
+        minTrackingConfidence: 0.45
       });
       self.postMessage({ type: 'ready' });
       return;
     }
 
-    if (data.type === 'frame' && detector) {
-      const result = detector.detectForVideo(data.frame, data.timestamp);
-      data.frame.close();
-      self.postMessage({ type: 'result', landmarks: result.landmarks || [] });
+    if (data.type === 'frame') {
+      if (detector) {
+        const result = detector.detectForVideo(data.frame, data.timestamp);
+        data.frame.close();
+        self.postMessage({ type: 'result', landmarks: result.landmarks || [] });
+      } else if (data.frame) {
+        data.frame.close();
+      }
     }
   } catch (error) {
     if (data.frame) data.frame.close();
