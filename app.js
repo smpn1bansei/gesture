@@ -4,7 +4,7 @@
  * ============================================================================
  * Fitur:
  * - MediaPipe Hands via CDN (max 2 tangan, split X < 0.5 Tim 1, X >= 0.5 Tim 2)
- * - Deteksi gestur 5 jari terbuka (jarak ujung jari 4,8,12,16,20 ke pergelangan 0)
+ * - Deteksi gestur satu jari telunjuk untuk menggerakkan bola kuning
  * - LERP smoothing koordinat tangan untuk menghindari jittering
  * - Bola Kuning Energi (~40px) pada landmark 9 telapak tangan
  * - Fisika bola jatuh & tabrakan lingkaran (Circle-Circle collision)
@@ -147,16 +147,18 @@ class SoundEffects {
 class ParticleSystem {
   constructor() {
     this.particles = [];
+    // Batasi efek kosmetik agar tidak mengambil waktu render dari kontrol tangan.
+    this.maxParticles = 90;
   }
 
   // Ledakan partikel hijau saat jawaban benar
   explodeCorrect(x, y) {
-    const count = 35;
+    const count = 24;
     const colors = ['#00ff88', '#00f0ff', '#ffffff', '#76ff03'];
     for (let i = 0; i < count; i++) {
       const angle = Math.random() * Math.PI * 2;
       const speed = 3 + Math.random() * 8;
-      this.particles.push({
+      this.add({
         x,
         y,
         vx: Math.cos(angle) * speed,
@@ -171,12 +173,12 @@ class ParticleSystem {
 
   // Percikan getaran merah saat jawaban salah
   explodeWrong(x, y) {
-    const count = 28;
+    const count = 20;
     const colors = ['#ff3344', '#ff0077', '#ff7700', '#ffffff'];
     for (let i = 0; i < count; i++) {
       const angle = Math.random() * Math.PI * 2;
       const speed = 4 + Math.random() * 7;
-      this.particles.push({
+      this.add({
         x,
         y,
         vx: Math.cos(angle) * speed,
@@ -192,7 +194,7 @@ class ParticleSystem {
   // Jejak aura kuning bola tangan
   addHandTrail(x, y) {
     if (Math.random() > 0.4) return;
-    this.particles.push({
+    this.add({
       x: x + (Math.random() - 0.5) * 20,
       y: y + (Math.random() - 0.5) * 20,
       vx: (Math.random() - 0.5) * 1.5,
@@ -204,7 +206,16 @@ class ParticleSystem {
     });
   }
 
+  add(particle) {
+    if (this.particles.length >= this.maxParticles) {
+      this.particles.shift();
+    }
+    this.particles.push(particle);
+  }
+
   updateAndDraw(ctx) {
+    ctx.save();
+    ctx.shadowBlur = 0;
     for (let i = this.particles.length - 1; i >= 0; i--) {
       const p = this.particles[i];
       p.x += p.vx;
@@ -218,16 +229,13 @@ class ParticleSystem {
         continue;
       }
 
-      ctx.save();
       ctx.globalAlpha = p.alpha;
       ctx.fillStyle = p.color;
-      ctx.shadowBlur = 10;
-      ctx.shadowColor = p.color;
       ctx.beginPath();
       ctx.arc(p.x, p.y, p.size, 0, Math.PI * 2);
       ctx.fill();
-      ctx.restore();
     }
+    ctx.restore();
   }
 }
 
@@ -263,6 +271,7 @@ class AnswerBall {
     this.shakeTimer = 0;
     this.isLocked = false; // Jika tim salah, bola di sisi tim meredup
     this.pulsePhase = Math.random() * Math.PI * 2;
+    this.spriteCache = new Map();
   }
 
   update(arenaWidth, canvasHeight) {
@@ -322,16 +331,31 @@ class AnswerBall {
       drawY += (Math.random() - 0.5) * 10;
     }
 
+    // Sprite hanya dibuat sekali per keadaan warna. Sebelumnya gradien, teks, dan
+    // pengukuran teks dibuat ulang untuk delapan bola di setiap frame.
+    const sprite = this.getSprite(this.isShaking ? 'shaking' : 'normal');
     ctx.save();
+    if (this.isLocked) ctx.globalAlpha = 0.28;
+    ctx.drawImage(sprite, drawX - sprite.width / 2, drawY - sprite.height / 2);
+    ctx.restore();
+  }
 
-    // Jika tim sedang terkunci, redupkan bola di sisi tersebut
-    if (this.isLocked) {
-      ctx.globalAlpha = 0.28;
-    }
+  getSprite(state) {
+    if (this.spriteCache.has(state)) return this.spriteCache.get(state);
 
-    // Pemilihan skema warna berdasarkan Tim & status
-    let primaryColor, secondaryColor, glowColor;
-    if (this.isShaking) {
+    const padding = 5;
+    const size = (this.radius + padding) * 2;
+    const sprite = document.createElement('canvas');
+    sprite.width = size;
+    sprite.height = size;
+    const ctx = sprite.getContext('2d');
+    const x = size / 2;
+    const y = size / 2;
+
+    let primaryColor;
+    let secondaryColor;
+    let glowColor;
+    if (state === 'shaking') {
       primaryColor = '#ff3344';
       secondaryColor = '#990011';
       glowColor = 'rgba(255, 51, 68, 0.9)';
@@ -345,69 +369,46 @@ class AnswerBall {
       glowColor = 'rgba(255, 0, 119, 0.7)';
     }
 
-    // Outer Ring Glow (Ringan & Cepat, Bebas Gaussian Blur Lag)
-    ctx.shadowBlur = 0;
     ctx.beginPath();
-    ctx.arc(drawX, drawY, this.radius + 3, 0, Math.PI * 2);
+    ctx.arc(x, y, this.radius + 3, 0, Math.PI * 2);
     ctx.strokeStyle = glowColor;
     ctx.lineWidth = 3;
     ctx.stroke();
 
-    // Body Bola (Radial Gradient 3D Glass Sphere)
     const radGrad = ctx.createRadialGradient(
-      drawX - this.radius * 0.3,
-      drawY - this.radius * 0.3,
-      this.radius * 0.1,
-      drawX,
-      drawY,
-      this.radius
+      x - this.radius * 0.3, y - this.radius * 0.3, this.radius * 0.1,
+      x, y, this.radius
     );
     radGrad.addColorStop(0, '#ffffff');
     radGrad.addColorStop(0.3, primaryColor);
     radGrad.addColorStop(0.8, secondaryColor);
     radGrad.addColorStop(1, '#050c18');
-
     ctx.fillStyle = radGrad;
     ctx.beginPath();
-    ctx.arc(drawX, drawY, this.radius, 0, Math.PI * 2);
+    ctx.arc(x, y, this.radius, 0, Math.PI * 2);
     ctx.fill();
-
-    // Cincin Neon Tipis Luar
     ctx.lineWidth = 2.5;
     ctx.strokeStyle = primaryColor;
     ctx.stroke();
 
-    // Reset shadow untuk teks tajam
-    ctx.shadowBlur = 0;
-
-    // Lingkaran Badge Huruf Opsi (A, B, C, D)
-    const badgeR = 15;
-    const badgeY = drawY - this.radius * 0.35;
+    const badgeY = y - this.radius * 0.35;
     ctx.fillStyle = '#070d1a';
     ctx.beginPath();
-    ctx.arc(drawX, badgeY, badgeR, 0, Math.PI * 2);
+    ctx.arc(x, badgeY, 15, 0, Math.PI * 2);
     ctx.fill();
     ctx.lineWidth = 1.5;
     ctx.strokeStyle = '#ffffff';
     ctx.stroke();
-
-    // Huruf Opsi (A, B, C, D)
     ctx.fillStyle = '#ffffff';
     ctx.font = '900 15px Orbitron, sans-serif';
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
-    ctx.fillText(this.label, drawX, badgeY);
+    ctx.fillText(this.label, x, badgeY);
 
-    // Teks Opsi Jawaban (Ringkas & Mudah Dibaca di IFP)
-    ctx.fillStyle = '#ffffff';
     ctx.font = 'bold 12px Plus Jakarta Sans, sans-serif';
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'middle';
-
-    // Pemotongan / Wrap Teks agar rapi di dalam bola
-    this.renderWrappedText(ctx, this.text, drawX, drawY + 14, this.radius * 1.6, 14);
-
-    ctx.restore();
+    this.renderWrappedText(ctx, this.text, x, y + 14, this.radius * 1.6, 14);
+    this.spriteCache.set(state, sprite);
+    return sprite;
   }
 
   // Helper pemotong kata agar muat rapi di dalam bola
@@ -471,7 +472,7 @@ class CameraQuizBattle {
     // Status Pemain & Bola Fisika Kuning (Muncul di Awal di Bagian Paling Bawah Layar)
     this.player1 = {
       team: 1,
-      isActive: false, // Apakah tangan terdeteksi terbuka di arena Tim 1
+      isActive: false, // Apakah gestur telunjuk aktif di arena Tim 1
       rawX: 0,
       rawY: 0,
       x: 0,
@@ -487,7 +488,7 @@ class CameraQuizBattle {
 
     this.player2 = {
       team: 2,
-      isActive: false, // Apakah tangan terdeteksi terbuka di arena Tim 2
+      isActive: false, // Apakah gestur telunjuk aktif di arena Tim 2
       rawX: 0,
       rawY: 0,
       x: 0,
@@ -501,12 +502,13 @@ class CameraQuizBattle {
       pulse: 0
     };
 
-    // Offscreen Canvas Ultra-Ringan untuk Inferensi AI MediaPipe (320x180 - Hemat CPU IFP)
+    // Canvas inferensi kecil: cukup untuk tangan, jauh lebih ringan di prosesor IFP.
     this.aiCanvas = document.createElement('canvas');
-    this.aiCanvas.width = 320;
-    this.aiCanvas.height = 180;
+    this.aiCanvas.width = 256;
+    this.aiCanvas.height = 144;
     this.aiCtx = this.aiCanvas.getContext('2d', { willReadFrequently: true });
     this.lastAITime = 0;
+    this.aiFrameInterval = this.getAIFrameInterval();
 
     // MediaPipe Hands & Camera instance
     this.hands = null;
@@ -622,10 +624,18 @@ class CameraQuizBattle {
     }
   }
 
-  // Ukur ulang canvas dengan batas resolusi aman untuk IFP (Full HD max)
+  // Gunakan 20 FPS pada perangkat IFP/mini-PC agar UI dan kamera tidak berebut CPU.
+  // Laptop/desktop yang lebih kuat tetap mendapat respons sekitar 24 FPS.
+  getAIFrameInterval() {
+    const cores = navigator.hardwareConcurrency || 4;
+    const memory = navigator.deviceMemory || 4;
+    return cores <= 4 || memory <= 4 ? 50 : 42;
+  }
+
+  // Ukur ulang canvas dengan batas resolusi aman untuk IFP.
   handleResize() {
-    const maxW = 1920;
-    const maxH = 1080;
+    const maxW = 1600;
+    const maxH = 900;
     const winW = window.innerWidth;
     const winH = window.innerHeight;
     const aspect = winW / winH;
@@ -633,8 +643,8 @@ class CameraQuizBattle {
     let targetW = winW;
     let targetH = winH;
 
-    // Jika layar IFP beresolusi 4K (3840x2160), batasi buffer canvas ke 1080p
-    // agar beban fill-rate GPU turun 75% tanpa mengurangi keterbacaan
+    // Pada IFP 4K, buffer 1600x900 memangkas fill-rate lebih dari 80%.
+    // Teks HUD tetap tajam karena berasal dari elemen HTML, bukan canvas.
     if (targetW > maxW || targetH > maxH) {
       if (aspect >= maxW / maxH) {
         targetW = maxW;
@@ -758,8 +768,8 @@ class CameraQuizBattle {
       // Pastikan stream sebelumnya dihentikan sebelum membuat instance Camera baru
       this.stopCamera();
 
-      // Inisialisasi Camera Utils baru dengan native wide-angle HD (1280x720)
-      // agar sensor kamera IFP tidak melakukan digital crop/zoom dan gambar tetap terang.
+      // Stream SD lebar: cukup untuk pelacakan tangan, lebih ringan untuk decoder,
+      // kompositor video, dan MediaPipe daripada stream HD pada IFP.
       let isInferencing = false;
       this.lastAITime = 0;
 
@@ -770,10 +780,11 @@ class CameraQuizBattle {
             return;
           }
 
-          // Throttle AI ke ~30 FPS (interval minimal 30ms)
-          // Dengan canvas kecil 320x180, inferensi MediaPipe berjalan secepat kilat tanpa lag CPU IFP
+          // Jangan melakukan inferensi ketika aplikasi tidak terlihat dan batasi laju AI.
+          // Hasil tetap dihaluskan pada game loop sehingga gerakan terasa kontinu.
+          if (document.hidden) return;
           const now = performance.now();
-          if (now - this.lastAITime < 30) {
+          if (now - this.lastAITime < this.aiFrameInterval) {
             return;
           }
 
@@ -781,8 +792,7 @@ class CameraQuizBattle {
           this.lastAITime = now;
 
           try {
-            // Gambar video ke canvas offscreen kecil (320x180) khusus untuk inferensi AI
-            // Ini membuat MediaPipe WASM berjalan sangat ringan dan super responsif di IFP
+            // MediaPipe hanya menerima buffer 256x144, bukan frame video resolusi penuh.
             this.aiCtx.drawImage(this.video, 0, 0, this.aiCanvas.width, this.aiCanvas.height);
             await this.hands.send({ image: this.aiCanvas });
           } catch (err) {
@@ -791,8 +801,8 @@ class CameraQuizBattle {
             isInferencing = false;
           }
         },
-        width: 1280,
-        height: 720 // Native HD Wide-Angle (terang, jernih, sudut pandang lebar tanpa crop)
+        width: 640,
+        height: 360
       });
 
       await this.cameraUtils.start();
@@ -846,55 +856,40 @@ class CameraQuizBattle {
   }
 
   // ============================================================================
-  // 6. GESTURE DETECTION (5 JARI TERBUKA & PEMBAGIAN SPLIT SCREEN)
+  // 6. GESTURE DETECTION (SATU JARI TELUNJUK & PEMBAGIAN SPLIT SCREEN)
   // ============================================================================
   /**
-   * Menghitung jarak kelima ujung jari ke pergelangan tangan (landmark 0).
-   * Ujung jari:
-   *  - Jempol   : Landmark 4
-   *  - Telunjuk : Landmark 8
-   *  - Tengah   : Landmark 12
-   *  - Manis    : Landmark 16
-   *  - Kelingking : Landmark 20
-   * 
-   * Landmark 0: Pergelangan tangan (WRIST)
-   * Landmark 9: Pangkal jari tengah (MIDDLE_FINGER_MCP)
+   * Hanya telunjuk yang direntangkan; jari lain dilipat. Koordinat kontrol
+   * memakai ujung telunjuk (landmark 8), sehingga bola lebih presisi.
    */
   /**
-   * Deteksi Gestur Telapak Tangan Terbuka (Responsif & Fleksibel untuk IFP):
-   * Mendeteksi jika siswa menghadapkan telapak tangan terbuka ke arah kamera untuk mendorong bola.
+   * Perbandingan berbasis ukuran telapak, jadi tetap berfungsi saat tangan dekat
+   * maupun jauh dari kamera. Tidak bergantung pada arah tangan di layar.
    */
-  isOpenHandGesture(landmarks) {
+  isSingleIndexFingerGesture(landmarks) {
     const wrist = landmarks[0];
     const palmBase = landmarks[9];
 
-    // Jarak acuan telapak tangan (skala independen)
+    // Jarak acuan telapak tangan (skala independen).
     const palmDist = Math.hypot(palmBase.x - wrist.x, palmBase.y - wrist.y);
     if (palmDist < 0.01) return false;
 
-    // Hitung jarak ujung-ujung jari ke pergelangan (landmark 0)
-    const dist4 = Math.hypot(landmarks[4].x - wrist.x, landmarks[4].y - wrist.y);
-    const dist8 = Math.hypot(landmarks[8].x - wrist.x, landmarks[8].y - wrist.y);
-    const dist12 = Math.hypot(landmarks[12].x - wrist.x, landmarks[12].y - wrist.y);
-    const dist16 = Math.hypot(landmarks[16].x - wrist.x, landmarks[16].y - wrist.y);
-    const dist20 = Math.hypot(landmarks[20].x - wrist.x, landmarks[20].y - wrist.y);
+    const distanceToWrist = (point) => Math.hypot(
+      landmarks[point].x - wrist.x,
+      landmarks[point].y - wrist.y
+    );
+    const isFingerExtended = (tip, pip) => (
+      distanceToWrist(tip) > distanceToWrist(pip) + palmDist * 0.28 &&
+      distanceToWrist(tip) > palmDist * 1.45
+    );
 
-    // Kriteria fleksibel: ujung jari menjauhi telapak tangan
-    const isThumbOpen = dist4 > palmDist * 0.95;
-    const isIndexOpen = dist8 > palmDist * 1.15;
-    const isMiddleOpen = dist12 > palmDist * 1.18;
-    const isRingOpen = dist16 > palmDist * 1.15;
-    const isPinkyOpen = dist20 > palmDist * 1.05;
+    const indexExtended = isFingerExtended(8, 6);
+    const middleExtended = isFingerExtended(12, 10);
+    const ringExtended = isFingerExtended(16, 14);
+    const pinkyExtended = isFingerExtended(20, 18);
 
-    let openFingersCount = 0;
-    if (isThumbOpen) openFingersCount++;
-    if (isIndexOpen) openFingersCount++;
-    if (isMiddleOpen) openFingersCount++;
-    if (isRingOpen) openFingersCount++;
-    if (isPinkyOpen) openFingersCount++;
-
-    // Minimal 3 jari terbuka cukup untuk mendeteksi telapak tangan aktif mendorong bola
-    return openFingersCount >= 3;
+    // Jempol yang sedikit terbuka dibiarkan agar pose telunjuk terasa nyaman.
+    return indexExtended && !middleExtended && !ringExtended && !pinkyExtended;
   }
 
   /**
@@ -912,31 +907,32 @@ class CameraQuizBattle {
       for (let i = 0; i < results.multiHandLandmarks.length; i++) {
         const landmarks = results.multiHandLandmarks[i];
 
-        // Koordinat landmark 9 (Pusat telapak tangan)
+        // Telapak menentukan sisi tim; ujung telunjuk menentukan posisi bola.
         const palmCenter = landmarks[9];
+        const indexTip = landmarks[8];
 
         // MIRROR FEED KOORDINAT:
         // Karena webcam dimirror dengan CSS transform: scaleX(-1), posisi layar adalah (1.0 - x)
-        const screenNormX = 1.0 - palmCenter.x;
-        const screenPixelX = bounds.offsetX + screenNormX * bounds.renderW;
-        const screenPixelY = bounds.offsetY + palmCenter.y * bounds.renderH;
+        const teamScreenX = bounds.offsetX + (1.0 - palmCenter.x) * bounds.renderW;
+        const screenPixelX = bounds.offsetX + (1.0 - indexTip.x) * bounds.renderW;
+        const screenPixelY = bounds.offsetY + indexTip.y * bounds.renderH;
 
-        const isOpen = this.isOpenHandGesture(landmarks);
+        const isSingleIndex = this.isSingleIndexFingerGesture(landmarks);
 
         // Pembagian Sumbu X Layar:
         // Kiri (< 0.5 lebar canvas) mengendalikan Tim 1
         // Kanan (>= 0.5 lebar canvas) mengendalikan Tim 2
-        if (screenPixelX < this.canvas.width / 2) {
+        if (teamScreenX < this.canvas.width / 2) {
           if (!p1Found) {
             p1Found = true;
-            this.player1.isActive = isOpen && !this.teamLocked[1];
+            this.player1.isActive = isSingleIndex && !this.teamLocked[1];
             this.player1.rawX = screenPixelX;
             this.player1.rawY = screenPixelY;
           }
         } else {
           if (!p2Found) {
             p2Found = true;
-            this.player2.isActive = isOpen && !this.teamLocked[2];
+            this.player2.isActive = isSingleIndex && !this.teamLocked[2];
             this.player2.rawX = screenPixelX;
             this.player2.rawY = screenPixelY;
           }
@@ -968,7 +964,7 @@ class CameraQuizBattle {
       this.ui.statusP1.innerHTML = '<span class="status-icon">🍃</span><span class="status-text">MELAYANG TURUN...</span>';
     } else {
       this.ui.statusP1.className = 'hand-status status-waiting';
-      this.ui.statusP1.innerHTML = '<span class="status-icon">✋</span><span class="status-text">ANGKAT TANGAN & DORONG</span>';
+      this.ui.statusP1.innerHTML = '<span class="status-icon">☝️</span><span class="status-text">ANGKAT 1 JARI</span>';
     }
 
     // Tim 2
@@ -983,7 +979,7 @@ class CameraQuizBattle {
       this.ui.statusP2.innerHTML = '<span class="status-icon">🍃</span><span class="status-text">MELAYANG TURUN...</span>';
     } else {
       this.ui.statusP2.className = 'hand-status status-waiting';
-      this.ui.statusP2.innerHTML = '<span class="status-icon">✋</span><span class="status-text">ANGKAT TANGAN & DORONG</span>';
+      this.ui.statusP2.innerHTML = '<span class="status-icon">☝️</span><span class="status-text">ANGKAT 1 JARI</span>';
     }
   }
 

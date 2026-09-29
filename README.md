@@ -15,11 +15,11 @@ Dirancang khusus untuk layar sentuh besar / **Interactive Flat Panel (IFP)** di 
      - **Arena Kanan (Tim 2 / Oranye-Pink)**: Dikendalikan oleh tangan pada sumbu $X \ge 0.5$.
    - Feed webcam dimirror (`CSS transform: scaleX(-1)`) agar terasa alami seperti bercermin di depan layar IFP.
 
-2. **Deteksi Gestur 5 Jari Terbuka**:
-   - Algoritma menghitung jarak kelima ujung jari (landmark 4, 8, 12, 16, 20) ke pergelangan tangan (landmark 0).
+2. **Deteksi Gestur 1 Jari Telunjuk**:
+   - Algoritma mengenali telunjuk yang direntangkan sementara jari tengah, manis, dan kelingking dilipat.
    - Dilengkapi **LERP smoothing filter** untuk meminimalisir getaran (*jittering*).
-   - Jika 5 jari terbuka: Memunculkan **Bola Kuning Menyala (Glowing Yellow Orb)** dengan radius ~40px di titik telapak tangan (landmark 9).
-   - Jika jari menggenggam (*fist*) atau tidak terdeteksi: Bola kuning menghilang dan tidak dapat berinteraksi.
+   - Angkat telunjuk untuk menggerakkan **Bola Kuning Menyala (Glowing Yellow Orb)** secara presisi di ujung jari (landmark 8).
+   - Jika telunjuk diturunkan atau tangan tidak terdeteksi, bola kuning turun perlahan ke posisi awal dan tidak dapat berinteraksi.
 
 3. **Fisika Bola Jawaban & Deteksi Benturan (Circle-Circle Collision)**:
    - 4 bola jawaban (A, B, C, D) jatuh perlahan dari atas untuk masing-masing tim.
@@ -91,5 +91,5 @@ Buka browser di `http://localhost:8080` dan izinkan akses kamera.
 2. Buka web aplikasi di browser dan klik tombol **"Mulai Permainan"**.
 3. Klik tombol **"Layar Penuh (Fullscreen)"** di sudut kanan bawah.
 4. Dua siswa berdiri di sisi kiri dan kanan kamera.
-5. Buka telapak tangan (5 jari meregang) untuk mengaktifkan Bola Energi Kuning.
+5. Angkat satu jari telunjuk untuk menggerakkan Bola Energi Kuning.
 6. Gerakkan tangan untuk menabrak bola jawaban yang paling tepat!
