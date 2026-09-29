@@ -345,9 +345,13 @@ class AnswerBall {
       glowColor = 'rgba(255, 0, 119, 0.7)';
     }
 
-    // Outer Glow Neon
-    ctx.shadowBlur = 18;
-    ctx.shadowColor = glowColor;
+    // Outer Ring Glow (Ringan & Cepat, Bebas Gaussian Blur Lag)
+    ctx.shadowBlur = 0;
+    ctx.beginPath();
+    ctx.arc(drawX, drawY, this.radius + 3, 0, Math.PI * 2);
+    ctx.strokeStyle = glowColor;
+    ctx.lineWidth = 3;
+    ctx.stroke();
 
     // Body Bola (Radial Gradient 3D Glass Sphere)
     const radGrad = ctx.createRadialGradient(
@@ -605,10 +609,31 @@ class CameraQuizBattle {
     }
   }
 
-  // Ukur ulang canvas agar sinkron dengan viewport
+  // Ukur ulang canvas dengan batas resolusi aman untuk IFP (Full HD max)
   handleResize() {
-    this.canvas.width = window.innerWidth;
-    this.canvas.height = window.innerHeight;
+    const maxW = 1920;
+    const maxH = 1080;
+    const winW = window.innerWidth;
+    const winH = window.innerHeight;
+    const aspect = winW / winH;
+
+    let targetW = winW;
+    let targetH = winH;
+
+    // Jika layar IFP beresolusi 4K (3840x2160), batasi buffer canvas ke 1080p
+    // agar beban fill-rate GPU turun 75% tanpa mengurangi keterbacaan
+    if (targetW > maxW || targetH > maxH) {
+      if (aspect >= maxW / maxH) {
+        targetW = maxW;
+        targetH = Math.round(maxW / aspect);
+      } else {
+        targetH = maxH;
+        targetW = Math.round(maxH * aspect);
+      }
+    }
+
+    this.canvas.width = targetW;
+    this.canvas.height = targetH;
   }
 
   // Menghitung bounding box aktual dari video dengan object-fit: cover
@@ -685,7 +710,7 @@ class CameraQuizBattle {
     this.showLoading(true, 'Menghubungkan Kamera & Memuat AI MediaPipe...');
 
     try {
-      // Inisialisasi MediaPipe Hands jika belum ada
+      // Inisialisasi MediaPipe Hands jika belum ada (gunakan modelComplexity: 0 Lite untuk IFP)
       if (!this.hands) {
         this.hands = new Hands({
           locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`
@@ -693,9 +718,9 @@ class CameraQuizBattle {
 
         this.hands.setOptions({
           maxNumHands: 2,
-          modelComplexity: 1,
-          minDetectionConfidence: 0.6,
-          minTrackingConfidence: 0.6
+          modelComplexity: 0, // Model Lite: jauh lebih ringan & cepat pada IFP/Mini PC
+          minDetectionConfidence: 0.5,
+          minTrackingConfidence: 0.5
         });
 
         this.hands.onResults((results) => this.onHandResults(results));
@@ -704,15 +729,26 @@ class CameraQuizBattle {
       // Pastikan stream sebelumnya dihentikan sebelum membuat instance Camera baru
       this.stopCamera();
 
-      // Inisialisasi Camera Utils baru
+      // Inisialisasi Camera Utils baru dengan throttling & resolusi optimal untuk AI
+      let isInferencing = false;
       this.cameraUtils = new Camera(this.video, {
         onFrame: async () => {
-          if (this.isCameraReady && this.video.readyState >= 2 && this.hands) {
+          // Lewati frame jika inferensi AI MediaPipe sebelumnya masih berjalan
+          // Ini mencegah antrean frame yang menyebabkan lag/stutter pada layar IFP
+          if (!this.isCameraReady || this.video.readyState < 2 || !this.hands || isInferencing) {
+            return;
+          }
+          isInferencing = true;
+          try {
             await this.hands.send({ image: this.video });
+          } catch (err) {
+            console.warn('MediaPipe frame skip:', err);
+          } finally {
+            isInferencing = false;
           }
         },
-        width: 1280,
-        height: 720
+        width: 640,
+        height: 360 // 360p sangat ideal untuk AI gestur tangan dan hemat resource GPU/CPU
       });
 
       await this.cameraUtils.start();
@@ -1358,9 +1394,8 @@ class CameraQuizBattle {
     this.ctx.arc(x, y, currentRadius * 1.8, 0, Math.PI * 2);
     this.ctx.fill();
 
-    // 2. Main Glowing Core
-    this.ctx.shadowBlur = 24;
-    this.ctx.shadowColor = '#ffea00';
+    // 2. Main Glowing Core (Hardware radial gradient tanpa beban shadowBlur)
+    this.ctx.shadowBlur = 0;
 
     const coreGrad = this.ctx.createRadialGradient(
       x - currentRadius * 0.25,
