@@ -296,53 +296,54 @@ class MathMotionBattle {
     const found = [false, false]; const bounds = this.videoBounds();
     const now = performance.now();
     for (const landmarks of hands) {
-      const palm = landmarks[9]; const index = landmarks[8];
+      const palm = landmarks[9];
       const team = (1 - palm.x) < .5 ? 0 : 1;
       if (found[team]) continue;
       found[team] = true;
       const player = this.players[team];
-      const indexGesture = this.isIndexFinger(landmarks);
-      if (indexGesture && !this.locked[team]) {
+      const palmGesture = this.isOpenPalm(landmarks);
+      if (palmGesture && !this.locked[team]) {
         player.active = true;
         player.lastGesture = now;
       } else if (now - player.lastGesture > 240) {
         player.active = false;
       }
       player.lastSeen = now;
-      player.targetX = bounds.x + (1 - index.x) * bounds.w;
-      player.targetY = bounds.y + index.y * bounds.h;
+      player.targetX = bounds.x + (1 - palm.x) * bounds.w;
+      player.targetY = bounds.y + palm.y * bounds.h;
     }
-    // MediaPipe kadang kehilangan landmark selama satu frame saat tangan bergerak
-    // cepat. Pertahankan kontrol maksimal 240 ms agar bola tidak tersendat.
+    // Pertahankan kontrol maksimal 240 ms saat tangan bergerak cepat
     found.forEach((seen, index) => {
       const player = this.players[index];
       if (!seen && now - player.lastGesture > 240) player.active = false;
     });
   }
 
-  isIndexFinger(points) {
+  isOpenPalm(points) {
     const wrist = points[0];
-    // Jarak 3D Euclidean (tahan terhadap pemendekan 2D saat jari menunjuk ke arah layar)
+    // Jarak 3D Euclidean terhadap pergelangan tangan
     const dist3D = (i) => Math.hypot(
       points[i].x - wrist.x,
       points[i].y - wrist.y,
       (points[i].z || 0) - (wrist.z || 0)
     );
-    const scale = dist3D(9);
+    const scale = dist3D(9); // Skala telapak (wrist ke pangkal jari tengah)
     if (scale < .01) return false;
 
-    // 1. Telunjuk (8) terulur jelas melampaui sendi PIP (6) dan telapak tangan (9)
-    const indexExtended = dist3D(8) > dist3D(6) * 1.06 && dist3D(8) > scale * 1.10;
-    if (!indexExtended) return false;
+    // Periksa jari yang terentang menjauhi sendi PIP dan telapak
+    const indexOpen = dist3D(8) > dist3D(6) * 1.05 && dist3D(8) > scale * 1.05;
+    const middleOpen = dist3D(12) > dist3D(10) * 1.05 && dist3D(12) > scale * 1.05;
+    const ringOpen = dist3D(16) > dist3D(14) * 1.05 && dist3D(16) > scale * 1.05;
+    const pinkyOpen = dist3D(20) > dist3D(18) * 1.05 && dist3D(20) > scale * 0.95;
 
-    // 2. Anatomi natural: telunjuk jelas lebih terjulur daripada jari tengah (12)
-    // (pada telapak terbuka atau pose 'peace' 2 jari, jari tengah selalu >= telunjuk)
-    const clearlyPastMiddle = dist3D(8) > dist3D(12) * 1.08;
+    let openFingers = 0;
+    if (indexOpen) openFingers++;
+    if (middleOpen) openFingers++;
+    if (ringOpen) openFingers++;
+    if (pinkyOpen) openFingers++;
 
-    // 3. Jari manis (16) tidak teracung tinggi seperti telapak terbuka
-    const clearlyPastRing = dist3D(8) > dist3D(16) * 1.05;
-
-    return clearlyPastMiddle && clearlyPastRing;
+    // Telapak tangan aktif jika minimal 3 jari terentang terbuka
+    return openFingers >= 3;
   }
 
   videoBounds() {
@@ -438,7 +439,7 @@ class MathMotionBattle {
     this.ui.message.classList.remove('hidden');
     this.ui.messageButton.classList.toggle('hidden', !final);
   }
-  updateHud() { this.players.forEach((player, i) => { this.ui.scores[i].textContent = this.scores[i]; this.ui.states[i].textContent = this.locked[i] ? '🔒 TERKUNCI' : player.controlled ? '⚡ MENGGERAKKAN BOLA' : '☝️ ANGKAT TELUNJUK'; }); }
+  updateHud() { this.players.forEach((player, i) => { this.ui.scores[i].textContent = this.scores[i]; this.ui.states[i].textContent = this.locked[i] ? '🔒 TERKUNCI' : player.controlled ? '⚡ MENGGERAKKAN BOLA' : '✋ BUKA TELAPAK TANGAN'; }); }
   draw() { const { ctx, canvas } = this; ctx.clearRect(0, 0, canvas.width, canvas.height); this.balls.forEach((ball) => ball.draw(ctx)); this.players.forEach((player, i) => this.drawPlayer(player, this.locked[i])); }
   drawPlayer(player, locked) { const { ctx } = this, r = player.radius, x = player.x, y = player.y; ctx.save(); ctx.globalAlpha = locked ? .26 : 1; const halo = ctx.createRadialGradient(x, y, r * .25, x, y, r * 1.8); halo.addColorStop(0, player.controlled ? 'rgba(255,239,80,.72)' : 'rgba(255,227,75,.38)'); halo.addColorStop(1, 'rgba(255,227,75,0)'); ctx.fillStyle = halo; ctx.beginPath(); ctx.arc(x, y, r * 1.8, 0, Math.PI * 2); ctx.fill(); const core = ctx.createRadialGradient(x - r*.3, y-r*.3, 2, x, y, r); core.addColorStop(0,'#fff'); core.addColorStop(.3,'#fff79b'); core.addColorStop(.8,'#ffc21c'); core.addColorStop(1,'#d86b00'); ctx.fillStyle=core; ctx.beginPath();ctx.arc(x,y,r,0,Math.PI*2);ctx.fill();ctx.strokeStyle='#fff';ctx.lineWidth=2;ctx.stroke();ctx.fillStyle='#18202b';ctx.font='800 12px Oxanium,sans-serif';ctx.textAlign='center';ctx.textBaseline='middle';ctx.fillText(locked?'🔒':`P${player.team}`,x,y);ctx.restore(); }
   setStatus(text, error = false, ready = false) { this.ui.status.textContent = text; this.ui.status.className = `camera-status${error ? ' error' : ready ? ' ready' : ''}`; }

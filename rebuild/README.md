@@ -1,6 +1,6 @@
 # Math Motion Battle
 
-Versi rebuild untuk Interactive Flat Panel: dua tim menggerakkan bola kuning dengan **satu jari telunjuk** untuk memilih jawaban matematika.
+Versi rebuild untuk Interactive Flat Panel: dua tim menggerakkan bola kuning dengan **telapak tangan terbuka** untuk memilih jawaban matematika.
 
 ## Menjalankan
 
@@ -24,7 +24,7 @@ Lalu buka `http://localhost:8080` melalui Chrome atau Edge dan izinkan kamera.
 - Pelacakan tangan memakai MediaPipe Tasks Vision di `Web Worker`; UI dan animasi bola tidak diblokir oleh inferensi AI.
 - Jika browser SmartScreen tidak mendukung *module worker*, game otomatis beralih ke mode kompatibilitas.
 - Frame 384×216 dikirim ke AI (ringan dan inferensi 2x lebih cepat pada Cortex-A73, latensi ~35-45 ms).
-- Deteksi telunjuk berbasis anatomi natural 3D: langsung aktif saat jari telunjuk teracung melampaui jari tengah dan manis tanpa menuntut kepalan tangan yang kaku.
+- Deteksi telapak tangan terbuka 3D: langsung aktif saat telapak tangan dibuka ke arah kamera; posisi bola mengikuti pusat telapak tangan dengan sangat stabil dan mulus.
 - Canvas game dibatasi 1600×900 pada layar 4K dan sprite jawaban di-cache.
 - Tombol Mulai Ulang (Reset) dengan modal konfirmasi dan efek suara Web Audio API murni.
 - Tidak menggunakan TensorFlow.js, `canvas-confetti`, filter video, atau `backdrop-filter` layar penuh.
