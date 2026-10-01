@@ -20,10 +20,11 @@ Lalu buka `http://localhost:8080` melalui Chrome atau Edge dan izinkan kamera.
 
 ## Desain performa
 
-- Tampilan kamera meminta kualitas hingga 1080p untuk menjaga gambar tetap jelas pada IFP.
-- Pelacakan tangan memakai MediaPipe Tasks Vision di `Web Worker`; UI dan fisika tidak diblokir oleh inferensi AI.
-- Jika browser SmartScreen tidak mendukung *module worker*, game otomatis beralih ke mode kompatibilitas. Tampilan permainan tetap dimulai setelah kamera siap.
-- Frame 480×270 dikirim ke AI agar jari siswa dari jarak 2 meter tetap terdeteksi tajam tanpa membebani CPU IFP.
+- Kamera meminta 720p (1280×720) 30 FPS untuk memangkas beban decoder kamera pada chipset Android IFP.
+- Pelacakan tangan memakai MediaPipe Tasks Vision di `Web Worker`; UI dan animasi bola tidak diblokir oleh inferensi AI.
+- Jika browser SmartScreen tidak mendukung *module worker*, game otomatis beralih ke mode kompatibilitas.
+- Frame 384×216 dikirim ke AI (ringan dan inferensi 2x lebih cepat pada Cortex-A73, latensi ~35-45 ms).
+- Deteksi telunjuk berbasis anatomi natural 3D: langsung aktif saat jari telunjuk teracung melampaui jari tengah dan manis tanpa menuntut kepalan tangan yang kaku.
 - Canvas game dibatasi 1600×900 pada layar 4K dan sprite jawaban di-cache.
 - Tombol Mulai Ulang (Reset) dengan modal konfirmasi dan efek suara Web Audio API murni.
 - Tidak menggunakan TensorFlow.js, `canvas-confetti`, filter video, atau `backdrop-filter` layar penuh.

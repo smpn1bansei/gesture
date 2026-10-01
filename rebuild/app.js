@@ -140,8 +140,8 @@ class MathMotionBattle {
     this.mainThreadDetector = null;
     this.sound = new Sound();
     this.aiCanvas = document.createElement('canvas');
-    this.aiCanvas.width = 480;
-    this.aiCanvas.height = 270;
+    this.aiCanvas.width = 384;
+    this.aiCanvas.height = 216;
     this.aiCtx = this.aiCanvas.getContext('2d', { willReadFrequently: true });
     this.players = [this.createPlayer(1), this.createPlayer(2)];
     this.ui = {
@@ -209,9 +209,9 @@ class MathMotionBattle {
       await this.startCamera();
       this.ui.start.classList.add('hidden');
       this.startRound(0);
-      // AI tetap memakai gambar kecil; 20 FPS membuat telunjuk terasa lebih
-      // langsung pada laptop, sedangkan worker akan melewati frame bila sibuk.
-      this.captureTimer = setInterval(() => this.captureFrame(), 50);
+      // AI memakai resolusi efisien 384×216; interval 40 ms (25 FPS) memberikan
+      // respon instan pada IFP tanpa menumpuk antrean proses worker.
+      this.captureTimer = setInterval(() => this.captureFrame(), 40);
       this.startTrackingWithFallback();
     } catch (error) {
       this.setStatus(error.message || 'KAMERA GAGAL — periksa izin kamera', true);
@@ -239,7 +239,7 @@ class MathMotionBattle {
 
   async startCamera() {
     this.setStatus('● MENYAMBUNGKAN KAMERA');
-    const stream = await navigator.mediaDevices.getUserMedia({ audio: false, video: { width: { ideal: 1920 }, height: { ideal: 1080 }, frameRate: { ideal: 30, max: 30 } } });
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: false, video: { width: { ideal: 1280 }, height: { ideal: 720 }, frameRate: { ideal: 30, max: 30 } } });
     this.video.srcObject = stream;
     await new Promise((resolve) => this.video.addEventListener('loadedmetadata', resolve, { once: true }));
     await this.video.play();
@@ -277,8 +277,6 @@ class MathMotionBattle {
     if (!this.trackerReady || this.trackerBusy || this.video.readyState < 2 || document.hidden) return;
     this.trackerBusy = true;
     try {
-      // Fallback hanya dipakai oleh browser SmartScreen lama yang menolak module
-      // worker. Resolusi AI tetap kecil dan laju tetap 15 FPS.
       if (this.mainThreadDetector) {
         this.aiCtx.drawImage(this.video, 0, 0, this.aiCanvas.width, this.aiCanvas.height);
         const result = this.mainThreadDetector.detectForVideo(this.aiCanvas, performance.now());
@@ -286,7 +284,7 @@ class MathMotionBattle {
         this.trackerBusy = false;
         return;
       }
-      const frame = await createImageBitmap(this.video, { resizeWidth: 480, resizeHeight: 270, resizeQuality: 'medium' });
+      const frame = await createImageBitmap(this.video, { resizeWidth: 384, resizeHeight: 216, resizeQuality: 'medium' });
       this.tracker.postMessage({ type: 'frame', frame, timestamp: performance.now() }, [frame]);
     } catch (error) {
       console.warn('Frame pelacak dilewati.', error);
@@ -323,21 +321,28 @@ class MathMotionBattle {
   }
 
   isIndexFinger(points) {
-    const wrist = points[0]; const palm = points[9];
-    // Jarak 3D Euclidean (tahan terhadap pemendekan 2D / foreshortening saat jari menunjuk ke arah layar)
+    const wrist = points[0];
+    // Jarak 3D Euclidean (tahan terhadap pemendekan 2D saat jari menunjuk ke arah layar)
     const dist3D = (i) => Math.hypot(
       points[i].x - wrist.x,
       points[i].y - wrist.y,
       (points[i].z || 0) - (wrist.z || 0)
     );
-    const scale = dist3D(9); if (scale < .01) return false;
-    // Jari telunjuk (8) terulur menjauhi pergelangan dan melebihi sendi PIP (6)
-    const indexRaised = dist3D(8) > dist3D(6) * 1.08 && dist3D(8) > scale * 1.15;
-    // Jari-jari lain (tengah 12, manis 16, kelingking 20) tertekuk / tidak teracung melebihi telunjuk
-    const middleFolded = dist3D(12) < dist3D(8) * 0.94 || dist3D(12) < dist3D(10) * 1.05;
-    const ringFolded = dist3D(16) < dist3D(8) * 0.90;
-    const pinkyFolded = dist3D(20) < dist3D(8) * 0.90;
-    return indexRaised && middleFolded && ringFolded && pinkyFolded;
+    const scale = dist3D(9);
+    if (scale < .01) return false;
+
+    // 1. Telunjuk (8) terulur jelas melampaui sendi PIP (6) dan telapak tangan (9)
+    const indexExtended = dist3D(8) > dist3D(6) * 1.06 && dist3D(8) > scale * 1.10;
+    if (!indexExtended) return false;
+
+    // 2. Anatomi natural: telunjuk jelas lebih terjulur daripada jari tengah (12)
+    // (pada telapak terbuka atau pose 'peace' 2 jari, jari tengah selalu >= telunjuk)
+    const clearlyPastMiddle = dist3D(8) > dist3D(12) * 1.08;
+
+    // 3. Jari manis (16) tidak teracung tinggi seperti telapak terbuka
+    const clearlyPastRing = dist3D(8) > dist3D(16) * 1.05;
+
+    return clearlyPastMiddle && clearlyPastRing;
   }
 
   videoBounds() {
@@ -367,7 +372,7 @@ class MathMotionBattle {
     this.players.forEach((player, i) => {
       const controlled = player.active && !this.locked[i] && performance.now() - player.lastGesture < 260;
       player.controlled = controlled;
-      if (controlled) { const blend = 1 - Math.exp(-dt * 19); player.x += (player.targetX - player.x) * blend; player.y += (player.targetY - player.y) * blend; }
+      if (controlled) { const blend = 1 - Math.exp(-dt * 36); player.x += (player.targetX - player.x) * blend; player.y += (player.targetY - player.y) * blend; }
       else { player.y += (player.homeY - player.y) * Math.min(1, dt * 4.5); player.x += (player.homeX - player.x) * Math.min(1, dt * 2.4); }
       const minX = i === 0 ? player.radius + 16 : this.canvas.width / 2 + player.radius + 16;
       const maxX = i === 0 ? this.canvas.width / 2 - player.radius - 16 : this.canvas.width - player.radius - 16;
