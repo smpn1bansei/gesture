@@ -26,7 +26,9 @@ Lalu buka `http://localhost:8080` melalui Chrome atau Edge dan izinkan kamera.
 - Frame 384×216 dikirim ke AI (ringan dan inferensi 2x lebih cepat pada Cortex-A73, latensi ~35-45 ms).
 - Deteksi telapak tangan terbuka 3D: langsung aktif saat telapak tangan dibuka ke arah kamera; posisi bola mengikuti pusat telapak tangan dengan sangat stabil dan mulus.
 - Canvas game dibatasi 1600×900 pada layar 4K dan sprite jawaban di-cache.
-- Tombol Mulai Ulang (Reset) dengan modal konfirmasi dan efek suara Web Audio API murni.
+- Menu Mulai Ulang (Reset): menonaktifkan kamera sementara (*pause track & AI frame capture*) dan menghentikan pergerakan bola selama menu terbuka.
+- Navigasi Beranda: tombol "BERANDA" tersedia di footer, di dalam modal menu, dan di layar selesai kuis untuk mematikan kamera sepenuhnya (*hardware release*) dan kembali ke layar awal.
+- Efek suara Web Audio API murni tanpa file audio eksternal.
 - Tidak menggunakan TensorFlow.js, `canvas-confetti`, filter video, atau `backdrop-filter` layar penuh.
 
 Koneksi internet diperlukan saat pertama kali memuat MediaPipe Tasks Vision dan model tangan dari CDN. Untuk penggunaan tanpa internet, kedua aset tersebut dapat diunduh lalu alamatnya di `hand-worker.js` diarahkan ke berkas lokal.
