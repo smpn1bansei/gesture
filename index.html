@@ -1,273 +1,82 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="id">
 <head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-  <title>Camera Quiz Battle: Hand Gesture (1-vs-1 IFP Game)</title>
-  
-  <!-- Google Fonts: Orbitron (Cyberpunk HUD) & Plus Jakarta Sans (Crisp Readability for IFP) -->
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Math Motion Battle</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@500;700;900&family=Plus+Jakarta+Sans:wght@500;600;700;800&display=swap" rel="stylesheet">
-  
-  <!-- CSS Stylesheet -->
+  <link href="https://fonts.googleapis.com/css2?family=Nunito:wght@600;700;800;900&family=Oxanium:wght@600;700;800&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="style.css">
-
-  <!-- External CDN Libraries (Client-Side Only, Zero Bundler) -->
-  <!-- MediaPipe Camera Utils -->
-  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
-  <!-- MediaPipe Hands -->
-  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js" crossorigin="anonymous"></script>
-  <!-- Canvas Confetti -->
-  <script src="https://cdn.jsdelivr.net/npm/canvas-confetti@1.6.0/dist/confetti.browser.min.js"></script>
 </head>
 <body>
-  <!-- Root Game Container (Aspect Ratio 16:9 responsive) -->
-  <div id="game-app">
-    <!-- Container Video Webcam (CSS transform: scaleX(-1) untuk efek cermin) -->
-    <div id="video-container">
-      <video id="webcam-video" playsinline autoplay muted></video>
-      <div class="video-tint"></div>
-    </div>
+  <main id="game">
+    <video id="camera" autoplay muted playsinline></video>
+    <div class="camera-shade"></div>
+    <canvas id="arena" aria-label="Arena permainan matematika"></canvas>
 
-    <!-- Main Canvas: Menampilkan bola fisika neon, bola kuning energi pemain & efek partikel -->
-    <canvas id="game-canvas"></canvas>
+    <div class="team-wash left"></div>
+    <div class="team-wash right"></div>
+    <div class="divider"><span>VS</span></div>
 
-    <!-- Split-Screen Neon Arena Overlay -->
-    <div id="arena-overlay">
-      <div class="team-side team-left">
-        <div class="side-watermark">ARENA TIM 1</div>
-        <!-- Lock Overlay jika Tim 1 salah menjawab -->
-        <div id="lock-overlay-p1" class="team-lock-overlay hidden">
-          <div class="lock-card">
-            <div class="lock-icon">🔒</div>
-            <div class="lock-badge">JAWABAN SALAH</div>
-            <h3 class="lock-title">TIM 1 TERKUNCI</h3>
-            <p class="lock-desc">Kesempatan ronde ini gugur!<br>Tim 2 masih dapat menjawab.</p>
-          </div>
-        </div>
-      </div>
-      <div class="neon-divider">
-        <div class="divider-line"></div>
-        <div class="divider-orb">VS</div>
-      </div>
-      <div class="team-side team-right">
-        <div class="side-watermark">ARENA TIM 2</div>
-        <!-- Lock Overlay jika Tim 2 salah menjawab -->
-        <div id="lock-overlay-p2" class="team-lock-overlay hidden">
-          <div class="lock-card">
-            <div class="lock-icon">🔒</div>
-            <div class="lock-badge">JAWABAN SALAH</div>
-            <h3 class="lock-title">TIM 2 TERKUNCI</h3>
-            <p class="lock-desc">Kesempatan ronde ini gugur!<br>Tim 1 masih dapat menjawab.</p>
-          </div>
-        </div>
-      </div>
-    </div>
-
-    <!-- HUD Layer: Split-screen scores & Top-Center Question Board -->
-    <header id="hud-container">
-      <!-- Team 1 (Left / Cyan-Blue) HUD -->
-      <div class="team-hud team-1">
-        <div class="team-badge">
-          <span class="team-dot"></span>
-          <span class="team-name">TIM 1 (BIRU)</span>
-        </div>
-        <div class="score-display">
-          <span class="score-label">SKOR</span>
-          <span id="score-p1" class="score-value">0</span>
-        </div>
-        <div id="status-p1" class="hand-status status-waiting">
-          <span class="status-icon">✋</span>
-          <span class="status-text">ANGKAT 1 JARI</span>
-        </div>
-      </div>
-
-      <!-- Center Question Board (High Contrast & Clear for IFP Classroom Displays) -->
-      <div id="question-board">
-        <div class="question-header">
-          <span class="round-badge" id="round-badge">SOAL 1 / 8</span>
-          <span class="subject-badge">INFORMATIKA SMP</span>
-        </div>
-        <div class="question-text-box">
-          <p id="question-text">Memuat pertanyaan kuis...</p>
-        </div>
-      </div>
-
-      <!-- Team 2 (Right / Orange-Pink) HUD -->
-      <div class="team-hud team-2">
-        <div class="team-badge">
-          <span class="team-dot"></span>
-          <span class="team-name">TIM 2 (ORANYE)</span>
-        </div>
-        <div class="score-display">
-          <span class="score-label">SKOR</span>
-          <span id="score-p2" class="score-value">0</span>
-        </div>
-        <div id="status-p2" class="hand-status status-waiting">
-          <span class="status-icon">✋</span>
-          <span class="status-text">ANGKAT 1 JARI</span>
-        </div>
-      </div>
+    <header class="hud">
+      <section class="team-card blue">
+        <span class="team-name">TIM BIRU</span>
+        <strong id="score-1">0</strong><small>POIN</small>
+        <span id="state-1" class="state">✋ ANGKAT TANGAN DI ATAS</span>
+      </section>
+      <section class="question-card">
+        <div class="round"><span id="round">SOAL 1 / 10</span><span>MATEMATIKA</span></div>
+        <h1 id="question">Memuat soal…</h1>
+      </section>
+      <section class="team-card orange">
+        <span class="team-name">TIM ORANYE</span>
+        <strong id="score-2">0</strong><small>POIN</small>
+        <span id="state-2" class="state">✋ ANGKAT TANGAN DI ATAS</span>
+      </section>
     </header>
 
-    <!-- Bottom Controls Bar (Fullscreen, Mute, Camera Status) -->
-    <footer id="bottom-bar">
-      <div class="hud-chip camera-indicator" id="camera-status">
-        <span class="indicator-led off"></span>
-        <span class="indicator-label">KAMERA: NONAKTIF</span>
-      </div>
+    <aside id="lock-1" class="lock left-lock hidden"><b>🔒</b><strong>TIM BIRU TERKUNCI</strong><span>Jawaban salah</span></aside>
+    <aside id="lock-2" class="lock right-lock hidden"><b>🔒</b><strong>TIM ORANYE TERKUNCI</strong><span>Jawaban salah</span></aside>
 
-      <div class="hud-controls">
-        <button id="btn-sound" class="ctrl-btn" title="Toggle Suara (Mute/Unmute)">
-          <span class="btn-icon">🔊</span>
-          <span class="btn-label">SUARA</span>
-        </button>
-        <button id="btn-fullscreen" class="ctrl-btn" title="Layar Penuh (IFP Fullscreen)">
-          <span class="btn-icon">⛶</span>
-          <span class="btn-label">LAYAR PENUH</span>
-        </button>
-        <button id="btn-reset" class="ctrl-btn btn-danger" title="Ulangi Permainan">
-          <span class="btn-icon">↺</span>
-          <span class="btn-label">RESET</span>
-        </button>
+    <footer>
+      <span id="camera-status" class="camera-status">● MENYIAPKAN KAMERA</span>
+      <div class="footer-actions">
+        <button id="reset-button" type="button">↺ MULAI ULANG</button>
+        <button id="fullscreen" type="button">⛶ LAYAR PENUH</button>
       </div>
     </footer>
 
-    <!-- Round Winner Notification Overlay Banner -->
-    <div id="round-banner" class="modal-backdrop hidden">
-      <div class="banner-card">
-        <div class="banner-badge" id="banner-badge">RONDE SELESAI</div>
-        <h2 class="banner-title" id="banner-title">TIM 1 BENAR!</h2>
-        <p class="banner-detail" id="banner-detail">+10 Poin didapatkan</p>
-        <div class="banner-answer" id="banner-answer">Jawaban: CPU (Processor)</div>
-        <div class="banner-progress">
-          <div class="banner-bar" id="banner-bar"></div>
+    <div id="reset-modal" class="message hidden">
+      <div>
+        <small>KONFIRMASI</small>
+        <h2>MULAI ULANG KUIS?</h2>
+        <p>Skor dan ronde kuis akan diatur ulang dari awal.<br><small style="color:#57718e; display:block; margin-top:6px;">Kamera dinonaktifkan sementara.</small></p>
+        <div style="display:flex; gap:14px; justify-content:center; margin-top:22px;">
+          <button id="cancel-reset" type="button" style="background:#40536d; min-width:130px;">BATAL</button>
+          <button id="confirm-reset" type="button" style="background:#d83232; min-width:150px;">YA, MULAI ULANG</button>
         </div>
       </div>
     </div>
 
-    <!-- Start / Welcome Screen Modal -->
-    <div id="start-modal" class="modal-backdrop">
-      <div class="modal-card">
-        <div class="cyber-glow-header">
-          <div class="subtitle-chip">1-VS-1 BATTLE QUIZ • EDUTECH IFP</div>
-          <h1 class="game-title">CAMERA QUIZ BATTLE</h1>
-          <p class="game-tagline">Kuis Interaktif Informatika SMP Berbasis Sensor Gerakan Tangan</p>
-        </div>
-
-        <div class="instructions-grid">
-          <div class="instruction-step">
-            <div class="step-num">1</div>
-            <div class="step-icon">👥</div>
-            <h4>Posisi Pemain</h4>
-            <p>Pemain 1 berdiri di area <strong>KIRI</strong>, Pemain 2 di area <strong>KANAN</strong> layar kamera.</p>
-          </div>
-          <div class="instruction-step">
-            <div class="step-num">2</div>
-            <div class="step-icon">☝️</div>
-            <h4>Angkat 1 Jari</h4>
-            <p>Angkat <strong>jari telunjuk</strong> untuk menggerakkan <strong>Bola Energi Kuning</strong>.</p>
-          </div>
-          <div class="instruction-step">
-            <div class="step-num">3</div>
-            <div class="step-icon">⚡</div>
-            <h4>Tabrak Jawaban</h4>
-            <p>Dorong bola jawaban yang benar. Jika salah, layarmu <strong>terkunci</strong> dan tim lawan masih bisa menjawab!</p>
-          </div>
-        </div>
-
-        <div class="camera-permission-notice">
-          <span class="notice-icon">📷</span>
-          <span>Aplikasi memerlukan izin akses kamera webcam untuk mendeteksi gestur tangan secara lokal.</span>
-        </div>
-
-        <div class="action-row modal-action-group">
-          <button id="btn-start-fullscreen" class="btn-secondary-action" title="Masuk Mode Layar Penuh IFP">
-            <span class="btn-icon">⛶</span>
-            <span class="btn-text">LAYAR PENUH (IFP)</span>
-          </button>
-          <button id="btn-start" class="btn-primary-action">
-            <span class="btn-sparkle">✨</span>
-            <span class="btn-text">MULAI PERMAINAN</span>
-          </button>
-        </div>
-
-        <!-- Footer Kredit Pengembang -->
-        <div class="modal-footer-credit">
-          <span class="credit-badge">👨‍💻</span>
-          <span class="credit-text">Development by <strong>Andri Fernanda, S.Pd</strong></span>
-        </div>
+    <div id="message" class="message hidden">
+      <div>
+        <small id="message-kicker">RONDE SELESAI</small>
+        <h2 id="message-title"></h2>
+        <p id="message-detail"></p>
+        <button id="message-button" class="hidden" type="button">MAIN LAGI</button>
       </div>
     </div>
-
-    <!-- Game Over / Final Podium Modal -->
-    <div id="gameover-modal" class="modal-backdrop hidden">
-      <div class="modal-card gameover-card">
-        <div class="trophy-icon">🏆</div>
-        <h2 class="gameover-title" id="winner-announcement">TIM 1 JUARA!</h2>
-        <p class="gameover-subtitle">Pertandingan Kuis Telah Selesai</p>
-
-        <div class="final-score-board">
-          <div class="final-team final-p1">
-            <div class="final-badge">TIM 1 (BIRU)</div>
-            <div class="final-score" id="final-score-p1">0</div>
-          </div>
-          <div class="final-vs">VS</div>
-          <div class="final-team final-p2">
-            <div class="final-badge">TIM 2 (ORANYE)</div>
-            <div class="final-score" id="final-score-p2">0</div>
-          </div>
-        </div>
-
-        <div class="action-row">
-          <button id="btn-play-again" class="btn-primary-action">
-            <span class="btn-icon">↺</span>
-            <span class="btn-text">MAIN LAGI</span>
-          </button>
-        </div>
-      </div>
-    </div>
-
-    <!-- Reset Confirmation Modal (Kembali ke Halaman Depan) -->
-    <div id="reset-modal" class="modal-backdrop hidden">
-      <div class="modal-card confirm-card">
-        <div class="confirm-icon">↺</div>
-        <h2 class="confirm-title">RESET PERTANDINGAN?</h2>
-        <p class="confirm-desc">Permainan saat ini akan dihentikan dan Anda akan kembali ke halaman depan.</p>
-        <div class="action-row modal-action-group">
-          <button id="btn-cancel-reset" class="btn-secondary-action">
-            <span class="btn-text">LANJUT MAIN</span>
-          </button>
-          <button id="btn-confirm-reset" class="btn-primary-action btn-danger-action">
-            <span class="btn-text">KEMBALI KE AWAL</span>
-          </button>
-        </div>
-      </div>
-    </div>
-
-    <!-- Camera Error / Troubleshooting Modal -->
-    <div id="error-modal" class="modal-backdrop hidden">
-      <div class="modal-card error-card">
-        <div class="error-icon">⚠️</div>
-        <h3 id="error-title">Kamera Tidak Terdeteksi</h3>
-        <p id="error-message">Pastikan izin kamera telah diberikan di browser Anda dan tidak ada aplikasi lain yang sedang menggunakan webcam.</p>
-        <button id="btn-retry-camera" class="btn-primary-action">
-          <span class="btn-icon">🔄</span>
-          <span class="btn-text">COBA LAGI</span>
-        </button>
-      </div>
-    </div>
-
-    <!-- Loading / Model Initializing Toast -->
-    <div id="loading-overlay" class="loading-overlay hidden">
-      <div class="loader-spinner"></div>
-      <div class="loader-text" id="loader-status">Memuat MediaPipe Hands AI Model...</div>
-    </div>
-  </div>
-
-  <!-- Game Scripts -->
+    <div id="start" class="start-screen"><div class="start-card">
+      <span class="eyebrow">GAME EDUKASI • 2 KELOMPOK</span>
+      <h2>MATH<br><em>MOTION BATTLE</em></h2>
+      <p>Buka <b>telapak tangan di atas layar</b> untuk menggerakkan bola, lalu <b>tarik bola ke bawah</b> menuju jawaban yang benar.</p>
+      <ul><li>Tim Biru di sisi kiri kamera</li><li>Tim Oranye di sisi kanan kamera</li><li>Salah menjawab mengunci sisi tim tersebut</li></ul>
+      <button id="start-button" type="button">MULAI PERMAINAN</button>
+      <small>Gunakan Chrome/Edge terbaru dan izinkan akses kamera.</small>
+    </div></div>
+  </main>
   <script src="questions.js"></script>
-  <script src="app.js"></script>
+  <script type="module" src="app.js"></script>
 </body>
 </html>

@@ -1,1630 +1,570 @@
-/**
- * ============================================================================
- * CAMERA QUIZ BATTLE: HAND GESTURE (1-vs-1 IFP Educational Game)
- * ============================================================================
- * Fitur:
- * - MediaPipe Hands via CDN (max 2 tangan, split X < 0.5 Tim 1, X >= 0.5 Tim 2)
- * - Deteksi gestur satu jari telunjuk untuk menggerakkan bola kuning
- * - LERP smoothing koordinat tangan untuk menghindari jittering
- * - Bola Kuning Energi (~40px) pada landmark 9 telapak tangan
- * - Fisika bola jatuh & tabrakan lingkaran (Circle-Circle collision)
- * - Area jatuh bola menyisakan 20% area bawah layar agar tidak menyentuh dasar
- * - Sistem penguncian tim parsial: Jika 1 tim salah, layarnya terkunci dan tim lawan tetap berkesempatan
- * - Tombol Fullscreen di halaman awal & di HUD bawah
- * - Web Audio API sintetis murni (nada kemenangan, buzzer salah, dorongan)
- * - Siklus ronde otomatis (banner 2.5 detik, transisi soal, game over)
- * - Siap deploy ke GitHub Pages murni Client-Side HTML5/JS
- */
+const QUESTIONS = window.mathQuestions || [];
+const OPTIONS = ['A', 'B', 'C', 'D'];
+const VISION_BUNDLE = 'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.21/vision_bundle.mjs';
+const VISION_WASM = 'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.21/wasm';
+const HAND_MODEL = 'https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task';
 
-// ============================================================================
-// 1. SOUND SYNTHESIS ENGINE (Pure Web Audio API - Zero External Audio Files)
-// ============================================================================
-class SoundEffects {
-  constructor() {
-    this.ctx = null;
-    this.isMuted = false;
-  }
-
+class Sound {
+  constructor() { this.ctx = null; }
   init() {
     if (!this.ctx) {
       const AudioCtx = window.AudioContext || window.webkitAudioContext;
-      this.ctx = new AudioCtx();
+      if (AudioCtx) this.ctx = new AudioCtx();
     }
-    if (this.ctx.state === 'suspended') {
-      this.ctx.resume();
-    }
+    if (this.ctx && this.ctx.state === 'suspended') this.ctx.resume();
   }
-
-  // Nada Kemenangan: Arpeggio ceria nada tinggi gembira (C5 - E5 - G5 - C6)
   playCorrect() {
-    if (this.isMuted) return;
-    this.init();
-    const notes = [523.25, 659.25, 783.99, 1046.50]; // C5, E5, G5, C6
+    this.init(); if (!this.ctx) return;
     const now = this.ctx.currentTime;
-
-    notes.forEach((freq, idx) => {
+    [523.25, 659.25, 783.99, 1046.5].forEach((freq, idx) => {
       const osc = this.ctx.createOscillator();
       const gain = this.ctx.createGain();
-
       osc.type = 'triangle';
       osc.frequency.setValueAtTime(freq, now + idx * 0.08);
-
       gain.gain.setValueAtTime(0, now + idx * 0.08);
-      gain.gain.linearRampToValueAtTime(0.25, now + idx * 0.08 + 0.02);
+      gain.gain.linearRampToValueAtTime(0.2, now + idx * 0.08 + 0.02);
       gain.gain.exponentialRampToValueAtTime(0.001, now + idx * 0.08 + 0.35);
-
-      osc.connect(gain);
-      gain.connect(this.ctx.destination);
-
-      osc.start(now + idx * 0.08);
-      osc.stop(now + idx * 0.08 + 0.4);
+      osc.connect(gain); gain.connect(this.ctx.destination);
+      osc.start(now + idx * 0.08); osc.stop(now + idx * 0.08 + 0.38);
     });
   }
-
-  // Buzzer Salah: Nada rendah distorsi / discordant saw waves
   playWrong() {
-    if (this.isMuted) return;
-    this.init();
-    const now = this.ctx.currentTime;
-
-    const osc1 = this.ctx.createOscillator();
-    const osc2 = this.ctx.createOscillator();
-    const gain = this.ctx.createGain();
-
-    osc1.type = 'sawtooth';
-    osc2.type = 'sawtooth';
-
-    osc1.frequency.setValueAtTime(110, now); // A2
-    osc2.frequency.setValueAtTime(116.54, now); // Disonansi detuned
-
-    osc1.frequency.exponentialRampToValueAtTime(60, now + 0.45);
-    osc2.frequency.exponentialRampToValueAtTime(65, now + 0.45);
-
-    gain.gain.setValueAtTime(0.35, now);
-    gain.gain.exponentialRampToValueAtTime(0.001, now + 0.5);
-
-    osc1.connect(gain);
-    osc2.connect(gain);
-    gain.connect(this.ctx.destination);
-
-    osc1.start(now);
-    osc2.start(now);
-    osc1.stop(now + 0.52);
-    osc2.stop(now + 0.52);
-  }
-
-  // Efek dorongan bola (pop / whoosh pelan)
-  playBounce() {
-    if (this.isMuted) return;
-    this.init();
+    this.init(); if (!this.ctx) return;
     const now = this.ctx.currentTime;
     const osc = this.ctx.createOscillator();
     const gain = this.ctx.createGain();
-
-    osc.type = 'sine';
-    osc.frequency.setValueAtTime(240, now);
-    osc.frequency.exponentialRampToValueAtTime(80, now + 0.09);
-
-    gain.gain.setValueAtTime(0.18, now);
-    gain.gain.exponentialRampToValueAtTime(0.001, now + 0.09);
-
-    osc.connect(gain);
-    gain.connect(this.ctx.destination);
-
-    osc.start(now);
-    osc.stop(now + 0.1);
-  }
-
-  // Fanfare Game Over
-  playGameOver() {
-    if (this.isMuted) return;
-    this.init();
-    const notes = [440, 554.37, 659.25, 880];
-    const now = this.ctx.currentTime;
-    notes.forEach((freq, idx) => {
-      const osc = this.ctx.createOscillator();
-      const gain = this.ctx.createGain();
-      osc.type = 'sine';
-      osc.frequency.setValueAtTime(freq, now + idx * 0.12);
-      gain.gain.setValueAtTime(0.3, now + idx * 0.12);
-      gain.gain.exponentialRampToValueAtTime(0.001, now + idx * 0.12 + 0.6);
-      osc.connect(gain);
-      gain.connect(this.ctx.destination);
-      osc.start(now + idx * 0.12);
-      osc.stop(now + idx * 0.12 + 0.65);
-    });
-  }
-
-  toggleMute() {
-    this.isMuted = !this.isMuted;
-    return this.isMuted;
+    osc.type = 'sawtooth';
+    osc.frequency.setValueAtTime(115, now);
+    osc.frequency.exponentialRampToValueAtTime(65, now + 0.4);
+    gain.gain.setValueAtTime(0.25, now);
+    gain.gain.exponentialRampToValueAtTime(0.001, now + 0.42);
+    osc.connect(gain); gain.connect(this.ctx.destination);
+    osc.start(now); osc.stop(now + 0.44);
   }
 }
 
-// ============================================================================
-// 2. PARTICLE & VISUAL EFFECTS SYSTEM
-// ============================================================================
-class ParticleSystem {
-  constructor() {
-    this.particles = [];
-    // Batasi efek kosmetik agar tidak mengambil waktu render dari kontrol tangan.
-    this.maxParticles = 90;
-  }
-
-  // Ledakan partikel hijau saat jawaban benar
-  explodeCorrect(x, y) {
-    const count = 24;
-    const colors = ['#00ff88', '#00f0ff', '#ffffff', '#76ff03'];
-    for (let i = 0; i < count; i++) {
-      const angle = Math.random() * Math.PI * 2;
-      const speed = 3 + Math.random() * 8;
-      this.add({
-        x,
-        y,
-        vx: Math.cos(angle) * speed,
-        vy: Math.sin(angle) * speed,
-        size: 4 + Math.random() * 6,
-        color: colors[Math.floor(Math.random() * colors.length)],
-        alpha: 1,
-        life: 0.02 + Math.random() * 0.02
-      });
-    }
-  }
-
-  // Percikan getaran merah saat jawaban salah
-  explodeWrong(x, y) {
-    const count = 20;
-    const colors = ['#ff3344', '#ff0077', '#ff7700', '#ffffff'];
-    for (let i = 0; i < count; i++) {
-      const angle = Math.random() * Math.PI * 2;
-      const speed = 4 + Math.random() * 7;
-      this.add({
-        x,
-        y,
-        vx: Math.cos(angle) * speed,
-        vy: Math.sin(angle) * speed,
-        size: 3 + Math.random() * 5,
-        color: colors[Math.floor(Math.random() * colors.length)],
-        alpha: 1,
-        life: 0.03 + Math.random() * 0.03
-      });
-    }
-  }
-
-  // Jejak aura kuning bola tangan
-  addHandTrail(x, y) {
-    if (Math.random() > 0.4) return;
-    this.add({
-      x: x + (Math.random() - 0.5) * 20,
-      y: y + (Math.random() - 0.5) * 20,
-      vx: (Math.random() - 0.5) * 1.5,
-      vy: (Math.random() - 0.5) * 1.5,
-      size: 3 + Math.random() * 4,
-      color: '#ffea00',
-      alpha: 0.8,
-      life: 0.05
-    });
-  }
-
-  add(particle) {
-    if (this.particles.length >= this.maxParticles) {
-      this.particles.shift();
-    }
-    this.particles.push(particle);
-  }
-
-  updateAndDraw(ctx) {
-    ctx.save();
-    ctx.shadowBlur = 0;
-    for (let i = this.particles.length - 1; i >= 0; i--) {
-      const p = this.particles[i];
-      p.x += p.vx;
-      p.y += p.vy;
-      p.vx *= 0.96;
-      p.vy *= 0.96;
-      p.alpha -= p.life;
-
-      if (p.alpha <= 0) {
-        this.particles.splice(i, 1);
-        continue;
-      }
-
-      ctx.globalAlpha = p.alpha;
-      ctx.fillStyle = p.color;
-      ctx.beginPath();
-      ctx.arc(p.x, p.y, p.size, 0, Math.PI * 2);
-      ctx.fill();
-    }
-    ctx.restore();
-  }
-}
-
-// ============================================================================
-// 3. ANSWER BALL CLASS (Physics & Rendering)
-// ============================================================================
 class AnswerBall {
-  constructor(team, optionIndex, label, text, isCorrect, arenaWidth, canvasHeight, startX, startY) {
-    this.team = team; // 1 (Left) atau 2 (Right)
-    this.optionIndex = optionIndex; // 0=A, 1=B, 2=C, 3=D
-    this.label = label; // "A", "B", "C", "D"
-    this.text = text; // teks opsi
-    this.isCorrect = isCorrect;
-
-    this.radius = 48;
-    this.x = startX;
+  constructor(team, index, text, correct, targetX, targetY, startY) {
+    this.team = team;
+    this.index = index;
+    this.text = text;
+    this.correct = correct;
+    this.radius = 52;
+    this.targetX = targetX;
+    this.targetY = targetY;
+    this.x = targetX;
     this.y = startY;
-
-    // Batas horizontal arena tim
-    this.minX = team === 1 ? this.radius + 15 : arenaWidth / 2 + this.radius + 15;
-    this.maxX = team === 1 ? arenaWidth / 2 - this.radius - 15 : arenaWidth - this.radius - 15;
-
-    // Batas bawah: Sisakan 20% area bawah layar (bola maksimal di 80% tinggi canvas)
-    this.maxY = canvasHeight * 0.80 - this.radius;
-
-    // Kecepatan jatuh perlahan
-    this.vx = (Math.random() - 0.5) * 1.2;
-    this.vy = 1.1 + Math.random() * 0.5;
-    this.gravity = 0.012;
-
-    // Status visual
-    this.isShaking = false;
-    this.shakeTimer = 0;
-    this.isLocked = false; // Jika tim salah, bola di sisi tim meredup
-    this.pulsePhase = Math.random() * Math.PI * 2;
-    this.spriteCache = new Map();
+    this.locked = false;
+    this.isReady = false;
+    this.floatPhase = (index * 1.5) + (team * 0.7);
+    this.cache = new Map();
   }
 
-  update(arenaWidth, canvasHeight) {
-    this.pulsePhase += 0.04;
-    this.minX = this.team === 1 ? this.radius + 15 : arenaWidth / 2 + this.radius + 15;
-    this.maxX = this.team === 1 ? arenaWidth / 2 - this.radius - 15 : arenaWidth - this.radius - 15;
-
-    // Batas bawah: Sisakan 20% area bawah layar
-    this.maxY = canvasHeight * 0.80 - this.radius;
-
-    // Penambahan gravitasi lembut
-    this.vy += this.gravity;
-    // Redaman gesekan horizontal
-    this.vx *= 0.98;
-
-    this.x += this.vx;
-    this.y += this.vy;
-
-    // Efek getar jika salah tersentuh
-    if (this.isShaking) {
-      this.shakeTimer--;
-      if (this.shakeTimer <= 0) {
-        this.isShaking = false;
+  update(dt, width, height) {
+    if (!this.isReady) {
+      // Naik perlahan dari bawah layar menuju posisi mengambang
+      const dy = this.targetY - this.y;
+      this.y += dy * Math.min(1, dt * 3.2);
+      if (Math.abs(dy) < 4) {
+        this.y = this.targetY;
+        this.isReady = true;
       }
-    }
-
-    // Pantulan batas kiri/kanan arena masing-masing
-    if (this.x < this.minX) {
-      this.x = this.minX;
-      this.vx = Math.abs(this.vx) * 0.7;
-    } else if (this.x > this.maxX) {
-      this.x = this.maxX;
-      this.vx = -Math.abs(this.vx) * 0.7;
-    }
-
-    // Pantulan lembut di area 80% layar agar tidak menyentuh dasar 20% bawah
-    if (this.y > this.maxY) {
-      this.y = this.maxY;
-      this.vy = -Math.abs(this.vy) * 0.7;
-      if (Math.abs(this.vy) < 0.9) {
-        this.vy = -1.9; // Beri daya angkat naik lembut ke area atas
-      }
-    }
-
-    // Batas atas layar
-    if (this.y < this.radius + 10 && this.vy < 0) {
-      this.vy = 1.0;
+    } else {
+      // Mengambang / melayang lembut di area bawah - tengah layar
+      this.floatPhase += dt * 1.8;
+      const bobY = Math.sin(this.floatPhase) * 10;
+      const bobX = Math.cos(this.floatPhase * 0.75) * 6;
+      this.x = this.targetX + bobX;
+      this.y = this.targetY + bobY;
     }
   }
 
-  draw(ctx) {
-    let drawX = this.x;
-    let drawY = this.y;
-
-    if (this.isShaking) {
-      drawX += (Math.random() - 0.5) * 10;
-      drawY += (Math.random() - 0.5) * 10;
-    }
-
-    // Sprite hanya dibuat sekali per keadaan warna. Sebelumnya gradien, teks, dan
-    // pengukuran teks dibuat ulang untuk delapan bola di setiap frame.
-    const sprite = this.getSprite(this.isShaking ? 'shaking' : 'normal');
-    ctx.save();
-    if (this.isLocked) ctx.globalAlpha = 0.28;
-    ctx.drawImage(sprite, drawX - sprite.width / 2, drawY - sprite.height / 2);
-    ctx.restore();
-  }
-
-  getSprite(state) {
-    if (this.spriteCache.has(state)) return this.spriteCache.get(state);
-
-    const padding = 5;
-    const size = (this.radius + padding) * 2;
-    const sprite = document.createElement('canvas');
-    sprite.width = size;
-    sprite.height = size;
-    const ctx = sprite.getContext('2d');
+  sprite(state) {
+    if (this.cache.has(state)) return this.cache.get(state);
+    const size = 116;
+    const ctx = Object.assign(document.createElement('canvas'), { width: size, height: size }).getContext('2d');
     const x = size / 2;
     const y = size / 2;
-
-    let primaryColor;
-    let secondaryColor;
-    let glowColor;
-    if (state === 'shaking') {
-      primaryColor = '#ff3344';
-      secondaryColor = '#990011';
-      glowColor = 'rgba(255, 51, 68, 0.9)';
-    } else if (this.team === 1) {
-      primaryColor = '#00f0ff';
-      secondaryColor = '#0055ff';
-      glowColor = 'rgba(0, 240, 255, 0.7)';
-    } else {
-      primaryColor = '#ff0077';
-      secondaryColor = '#ff7700';
-      glowColor = 'rgba(255, 0, 119, 0.7)';
-    }
-
-    ctx.beginPath();
-    ctx.arc(x, y, this.radius + 3, 0, Math.PI * 2);
-    ctx.strokeStyle = glowColor;
-    ctx.lineWidth = 3;
-    ctx.stroke();
-
-    const radGrad = ctx.createRadialGradient(
-      x - this.radius * 0.3, y - this.radius * 0.3, this.radius * 0.1,
-      x, y, this.radius
-    );
-    radGrad.addColorStop(0, '#ffffff');
-    radGrad.addColorStop(0.3, primaryColor);
-    radGrad.addColorStop(0.8, secondaryColor);
-    radGrad.addColorStop(1, '#050c18');
-    ctx.fillStyle = radGrad;
-    ctx.beginPath();
-    ctx.arc(x, y, this.radius, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.lineWidth = 2.5;
-    ctx.strokeStyle = primaryColor;
-    ctx.stroke();
-
-    const badgeY = y - this.radius * 0.35;
-    ctx.fillStyle = '#070d1a';
-    ctx.beginPath();
-    ctx.arc(x, badgeY, 15, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.lineWidth = 1.5;
-    ctx.strokeStyle = '#ffffff';
-    ctx.stroke();
-    ctx.fillStyle = '#ffffff';
-    ctx.font = '900 15px Orbitron, sans-serif';
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'middle';
-    ctx.fillText(this.label, x, badgeY);
-
-    ctx.font = 'bold 12px Plus Jakarta Sans, sans-serif';
-    this.renderWrappedText(ctx, this.text, x, y + 14, this.radius * 1.6, 14);
-    this.spriteCache.set(state, sprite);
-    return sprite;
+    const bad = state === 'bad';
+    const colors = bad ? ['#ff6969', '#b31837', 'rgba(255,80,80,.9)'] : this.team === 1
+      ? ['#88edff', '#1675d4', 'rgba(45,198,255,.95)']
+      : ['#ffd081', '#e85a20', 'rgba(255,133,49,.95)'];
+    ctx.beginPath(); ctx.arc(x, y, 54, 0, Math.PI * 2); ctx.strokeStyle = colors[2]; ctx.lineWidth = 3; ctx.stroke();
+    const fill = ctx.createRadialGradient(x - 17, y - 19, 5, x, y, 51);
+    fill.addColorStop(0, '#fff'); fill.addColorStop(.24, colors[0]); fill.addColorStop(.78, colors[1]); fill.addColorStop(1, '#07111f');
+    ctx.fillStyle = fill; ctx.beginPath(); ctx.arc(x, y, 51, 0, Math.PI * 2); ctx.fill();
+    ctx.strokeStyle = 'rgba(255,255,255,.9)'; ctx.lineWidth = 1.5; ctx.stroke();
+    ctx.fillStyle = '#07111f'; ctx.beginPath(); ctx.arc(x, y - 18, 15, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = '#fff'; ctx.font = '800 15px Oxanium,sans-serif'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillText(OPTIONS[this.index], x, y - 18);
+    ctx.font = '900 13px Nunito,sans-serif';
+    const lines = this.wrap(ctx, this.text, 84);
+    const base = y + 15 - ((lines.length - 1) * 7);
+    lines.forEach((line, i) => { ctx.strokeStyle = 'rgba(0,0,0,.68)'; ctx.lineWidth = 3; ctx.strokeText(line, x, base + i * 14); ctx.fillStyle = '#fff'; ctx.fillText(line, x, base + i * 14); });
+    const canvas = ctx.canvas;
+    this.cache.set(state, canvas);
+    return canvas;
   }
 
-  // Helper pemotong kata agar muat rapi di dalam bola
-  renderWrappedText(ctx, text, x, y, maxWidth, lineHeight) {
-    const words = text.split(' ');
-    let lines = [];
-    let currentLine = words[0];
-
-    for (let i = 1; i < words.length; i++) {
-      const testLine = currentLine + ' ' + words[i];
-      if (ctx.measureText(testLine).width < maxWidth) {
-        currentLine = testLine;
-      } else {
-        lines.push(currentLine);
-        currentLine = words[i];
-        if (lines.length >= 2) break; // Maksimal 2 baris teks dalam bola
-      }
+  wrap(ctx, text, maxWidth) {
+    const words = text.split(' '); const lines = []; let line = '';
+    for (const word of words) {
+      const candidate = line ? `${line} ${word}` : word;
+      if (ctx.measureText(candidate).width > maxWidth && line) { lines.push(line); line = word; if (lines.length === 2) break; }
+      else line = candidate;
     }
-    lines.push(currentLine);
+    if (line && lines.length < 3) lines.push(line);
+    return lines.slice(0, 2);
+  }
 
-    const startY = y - ((lines.length - 1) * lineHeight) / 2;
-    lines.forEach((line, index) => {
-      // Stroke teks untuk kontras tinggi di layar IFP
-      ctx.lineWidth = 3.5;
-      ctx.strokeStyle = 'rgba(0, 0, 0, 0.9)';
-      ctx.strokeText(line, x, startY + index * lineHeight);
-      ctx.fillText(line, x, startY + index * lineHeight);
-    });
+  draw(ctx, bad = false) {
+    ctx.save();
+    if (this.locked) ctx.globalAlpha = 0.25;
+    const sprite = this.sprite(bad ? 'bad' : 'normal');
+    ctx.drawImage(sprite, this.x - sprite.width / 2, this.y - sprite.height / 2);
+    ctx.restore();
   }
 }
 
-// ============================================================================
-// 4. MAIN GAME CONTROLLER & MEDIAPIPE LOGIC
-// ============================================================================
-class CameraQuizBattle {
+class MathMotionBattle {
   constructor() {
-    // Canvas & Context
-    this.canvas = document.getElementById('game-canvas');
+    this.canvas = document.querySelector('#arena');
     this.ctx = this.canvas.getContext('2d');
-    this.video = document.getElementById('webcam-video');
-
-    // Sub-sistem
-    this.sound = new SoundEffects();
-    this.particles = new ParticleSystem();
-
-    // Data Bank Soal
-    this.questions = window.quizQuestions || [];
-    this.currentQuestionIndex = 0;
-
-    // Status Skor
-    this.scoreP1 = 0;
-    this.scoreP2 = 0;
-
-    // State Mesin Game & Penguncian Tim Parsial
-    this.isPlaying = false;
-    this.roundEnded = false;
-    this.teamLocked = { 1: false, 2: false };
-    this.balls = []; // Array of AnswerBall
-    this.lastBounceSoundTime = 0;
-
-    // Status Pemain & Bola Fisika Kuning (Muncul di Awal di Bagian Paling Bawah Layar)
-    this.player1 = {
-      team: 1,
-      isActive: false, // Apakah gestur telunjuk aktif di arena Tim 1
-      rawX: 0,
-      rawY: 0,
-      x: 0,
-      y: 0,
-      vx: 0,
-      vy: 0,
-      homeX: 0,
-      homeY: 0,
-      radius: 38,
-      isControlled: false, // Apakah sedang didorong oleh tangan
-      pulse: 0
-    };
-
-    this.player2 = {
-      team: 2,
-      isActive: false, // Apakah gestur telunjuk aktif di arena Tim 2
-      rawX: 0,
-      rawY: 0,
-      x: 0,
-      y: 0,
-      vx: 0,
-      vy: 0,
-      homeX: 0,
-      homeY: 0,
-      radius: 38,
-      isControlled: false, // Apakah sedang didorong oleh tangan
-      pulse: 0
-    };
-
-    // Canvas inferensi kecil: cukup untuk tangan, jauh lebih ringan di prosesor IFP.
-    this.aiCanvas = document.createElement('canvas');
-    this.aiCanvas.width = 256;
-    this.aiCanvas.height = 144;
-    this.aiCtx = this.aiCanvas.getContext('2d', { willReadFrequently: true });
-    this.lastAITime = 0;
-    this.aiFrameInterval = this.getAIFrameInterval();
-
-    // MediaPipe Hands & Camera instance
-    this.hands = null;
-    this.cameraUtils = null;
-    this.isCameraReady = false;
-    this.isLoopRunning = false;
-
-    // Inisialisasi DOM & Event
-    this.initDOM();
-    this.bindEvents();
-    this.handleResize();
-    window.addEventListener('resize', () => this.handleResize());
-  }
-
-  // Cache elemen UI
-  initDOM() {
-    this.ui = {
-      scoreP1: document.getElementById('score-p1'),
-      scoreP2: document.getElementById('score-p2'),
-      statusP1: document.getElementById('status-p1'),
-      statusP2: document.getElementById('status-p2'),
-      roundBadge: document.getElementById('round-badge'),
-      questionText: document.getElementById('question-text'),
-      cameraStatus: document.getElementById('camera-status'),
-      btnSound: document.getElementById('btn-sound'),
-      btnFullscreen: document.getElementById('btn-fullscreen'),
-      btnStartFullscreen: document.getElementById('btn-start-fullscreen'),
-      btnReset: document.getElementById('btn-reset'),
-      resetModal: document.getElementById('reset-modal'),
-      btnCancelReset: document.getElementById('btn-cancel-reset'),
-      btnConfirmReset: document.getElementById('btn-confirm-reset'),
-      btnStart: document.getElementById('btn-start'),
-      btnPlayAgain: document.getElementById('btn-play-again'),
-      btnRetryCamera: document.getElementById('btn-retry-camera'),
-      startModal: document.getElementById('start-modal'),
-      gameoverModal: document.getElementById('gameover-modal'),
-      errorModal: document.getElementById('error-modal'),
-      lockOverlayP1: document.getElementById('lock-overlay-p1'),
-      lockOverlayP2: document.getElementById('lock-overlay-p2'),
-      roundBanner: document.getElementById('round-banner'),
-      bannerCard: this.canvas.parentElement.querySelector('.banner-card'),
-      bannerBadge: document.getElementById('banner-badge'),
-      bannerTitle: document.getElementById('banner-title'),
-      bannerDetail: document.getElementById('banner-detail'),
-      bannerAnswer: document.getElementById('banner-answer'),
-      bannerBar: document.getElementById('banner-bar'),
-      loadingOverlay: document.getElementById('loading-overlay'),
-      loaderStatus: document.getElementById('loader-status'),
-      winnerAnnouncement: document.getElementById('winner-announcement'),
-      finalScoreP1: document.getElementById('final-score-p1'),
-      finalScoreP2: document.getElementById('final-score-p2')
-    };
-  }
-
-  // Hubungkan event click & interaksi
-  bindEvents() {
-    // Tombol Mulai Permainan
-    this.ui.btnStart.addEventListener('click', () => {
-      this.sound.init();
-      this.ui.startModal.classList.add('hidden');
-      this.startCameraAndGame();
-    });
-
-    // Tombol Layar Penuh di Halaman Awal
-    if (this.ui.btnStartFullscreen) {
-      this.ui.btnStartFullscreen.addEventListener('click', () => {
-        this.toggleFullscreen();
-      });
-    }
-
-    // Tombol Main Lagi setelah Game Over
-    this.ui.btnPlayAgain.addEventListener('click', () => {
-      this.ui.gameoverModal.classList.add('hidden');
-      this.resetGame();
-    });
-
-    // Tombol Coba Lagi jika kamera gagal
-    this.ui.btnRetryCamera.addEventListener('click', () => {
-      this.ui.errorModal.classList.add('hidden');
-      this.startCameraAndGame();
-    });
-
-    // Tombol Layar Penuh IFP di HUD bawah
-    this.ui.btnFullscreen.addEventListener('click', () => {
-      this.toggleFullscreen();
-    });
-
-    // Tombol Toggle Audio
-    this.ui.btnSound.addEventListener('click', () => {
-      const isMuted = this.sound.toggleMute();
-      this.ui.btnSound.querySelector('.btn-icon').textContent = isMuted ? '🔇' : '🔊';
-      this.ui.btnSound.querySelector('.btn-label').textContent = isMuted ? 'BISU' : 'SUARA';
-    });
-
-    // Tombol Buka Modal Reset Game
-    this.ui.btnReset.addEventListener('click', () => {
-      this.ui.resetModal.classList.remove('hidden');
-    });
-
-    // Tombol Batal Reset (Lanjut Main)
-    if (this.ui.btnCancelReset) {
-      this.ui.btnCancelReset.addEventListener('click', () => {
-        this.ui.resetModal.classList.add('hidden');
-      });
-    }
-
-    // Tombol Konfirmasi Reset (Kembali ke Halaman Depan / Awal)
-    if (this.ui.btnConfirmReset) {
-      this.ui.btnConfirmReset.addEventListener('click', () => {
-        this.ui.resetModal.classList.add('hidden');
-        this.returnToHome();
-      });
-    }
-  }
-
-  // Gunakan 20 FPS pada perangkat IFP/mini-PC agar UI dan kamera tidak berebut CPU.
-  // Laptop/desktop yang lebih kuat tetap mendapat respons sekitar 24 FPS.
-  getAIFrameInterval() {
-    const cores = navigator.hardwareConcurrency || 4;
-    const memory = navigator.deviceMemory || 4;
-    return cores <= 4 || memory <= 4 ? 50 : 42;
-  }
-
-  // Ukur ulang canvas dengan batas resolusi aman untuk IFP.
-  handleResize() {
-    const maxW = 1600;
-    const maxH = 900;
-    const winW = window.innerWidth;
-    const winH = window.innerHeight;
-    const aspect = winW / winH;
-
-    let targetW = winW;
-    let targetH = winH;
-
-    // Pada IFP 4K, buffer 1600x900 memangkas fill-rate lebih dari 80%.
-    // Teks HUD tetap tajam karena berasal dari elemen HTML, bukan canvas.
-    if (targetW > maxW || targetH > maxH) {
-      if (aspect >= maxW / maxH) {
-        targetW = maxW;
-        targetH = Math.round(maxW / aspect);
-      } else {
-        targetH = maxH;
-        targetW = Math.round(maxH * aspect);
-      }
-    }
-
-    this.canvas.width = targetW;
-    this.canvas.height = targetH;
-
-    // Posisi awal/standby bola kuning di bagian paling bawah layar (zona aman 20% bawah)
-    this.player1.homeX = this.canvas.width * 0.25;
-    this.player1.homeY = this.canvas.height * 0.88;
-    this.player2.homeX = this.canvas.width * 0.75;
-    this.player2.homeY = this.canvas.height * 0.88;
-
-    // Jika bola sedang standby atau belum diposisikan, letakkan di posisi home dasar
-    if (!this.player1.isControlled && (this.player1.y === 0 || this.player1.y >= this.player1.homeY - 30)) {
-      this.player1.x = this.player1.homeX;
-      this.player1.y = this.player1.homeY;
-    }
-    if (!this.player2.isControlled && (this.player2.y === 0 || this.player2.y >= this.player2.homeY - 30)) {
-      this.player2.x = this.player2.homeX;
-      this.player2.y = this.player2.homeY;
-    }
-  }
-
-  // Menghitung bounding box aktual dari video dengan object-fit: cover
-  getVideoRenderBounds() {
-    const vw = this.video.videoWidth || 1280;
-    const vh = this.video.videoHeight || 720;
-    const cw = this.canvas.width;
-    const ch = this.canvas.height;
-
-    const videoAspect = vw / vh;
-    const canvasAspect = cw / ch;
-
-    let renderW, renderH, offsetX, offsetY;
-    if (canvasAspect > videoAspect) {
-      renderW = cw;
-      renderH = cw / videoAspect;
-      offsetX = 0;
-      offsetY = (ch - renderH) / 2;
-    } else {
-      renderH = ch;
-      renderW = ch * videoAspect;
-      offsetX = (cw - renderW) / 2;
-      offsetY = 0;
-    }
-    return { renderW, renderH, offsetX, offsetY };
-  }
-
-  // Toggle mode fullscreen IFP
-  toggleFullscreen() {
-    if (!document.fullscreenElement) {
-      document.documentElement.requestFullscreen().catch((err) => {
-        console.warn('Gagal masuk mode fullscreen:', err);
-      });
-    } else {
-      if (document.exitFullscreen) {
-        document.exitFullscreen();
-      }
-    }
-  }
-
-  // ============================================================================
-  // 5. MEDIAPIPE HANDS SETUP & WEBCAM STREAM
-  // ============================================================================
-  // Hentikan dan matikan perangkat keras webcam (hardware LED webcam mati)
-  stopCamera() {
-    if (this.cameraUtils) {
-      try {
-        if (typeof this.cameraUtils.stop === 'function') {
-          this.cameraUtils.stop();
-        }
-      } catch (e) {
-        console.warn('Gagal menghentikan cameraUtils:', e);
-      }
-      this.cameraUtils = null;
-    }
-
-    // Matikan seluruh hardware stream tracks
-    if (this.video && this.video.srcObject) {
-      const stream = this.video.srcObject;
-      if (typeof stream.getTracks === 'function') {
-        stream.getTracks().forEach((track) => {
-          track.stop();
-        });
-      }
-      this.video.srcObject = null;
-    }
-
-    this.isCameraReady = false;
-    this.updateCameraStatus('KAMERA: NONAKTIF', false);
-  }
-
-  // Nyalakan kamera & hubungkan MediaPipe Hands saat user klik Mulai Permainan
-  async startCameraAndGame() {
-    this.showLoading(true, 'Menghubungkan Kamera & Memuat AI MediaPipe...');
-
-    try {
-      // Inisialisasi MediaPipe Hands jika belum ada (gunakan modelComplexity: 0 Lite untuk IFP)
-      if (!this.hands) {
-        this.hands = new Hands({
-          locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`
-        });
-
-        this.hands.setOptions({
-          maxNumHands: 2,
-          modelComplexity: 0, // Model Lite: jauh lebih ringan & cepat pada IFP/Mini PC
-          minDetectionConfidence: 0.5,
-          minTrackingConfidence: 0.5
-        });
-
-        this.hands.onResults((results) => this.onHandResults(results));
-      }
-
-      // Pastikan stream sebelumnya dihentikan sebelum membuat instance Camera baru
-      this.stopCamera();
-
-      // Stream SD lebar: cukup untuk pelacakan tangan, lebih ringan untuk decoder,
-      // kompositor video, dan MediaPipe daripada stream HD pada IFP.
-      let isInferencing = false;
-      this.lastAITime = 0;
-
-      this.cameraUtils = new Camera(this.video, {
-        onFrame: async () => {
-          // Lewati frame jika inferensi AI MediaPipe sebelumnya masih berjalan
-          if (!this.isCameraReady || this.video.readyState < 2 || !this.hands || isInferencing) {
-            return;
-          }
-
-          // Jangan melakukan inferensi ketika aplikasi tidak terlihat dan batasi laju AI.
-          // Hasil tetap dihaluskan pada game loop sehingga gerakan terasa kontinu.
-          if (document.hidden) return;
-          const now = performance.now();
-          if (now - this.lastAITime < this.aiFrameInterval) {
-            return;
-          }
-
-          isInferencing = true;
-          this.lastAITime = now;
-
-          try {
-            // MediaPipe hanya menerima buffer 256x144, bukan frame video resolusi penuh.
-            this.aiCtx.drawImage(this.video, 0, 0, this.aiCanvas.width, this.aiCanvas.height);
-            await this.hands.send({ image: this.aiCanvas });
-          } catch (err) {
-            console.warn('MediaPipe frame skip:', err);
-          } finally {
-            isInferencing = false;
-          }
-        },
-        width: 640,
-        height: 360
-      });
-
-      await this.cameraUtils.start();
-      this.isCameraReady = true;
-      this.showLoading(false);
-      this.updateCameraStatus('KAMERA: AKTIF', false);
-
-      // Mulai Permainan
-      this.resetGame();
-
-      // Mulai Game Loop jika belum berjalan
-      if (!this.isLoopRunning) {
-        this.isLoopRunning = true;
-        requestAnimationFrame(() => this.gameLoop());
-      }
-    } catch (err) {
-      console.error('Error inisialisasi kamera / MediaPipe:', err);
-      this.showLoading(false);
-      this.updateCameraStatus('KAMERA: GAGAL', true);
-      this.ui.errorModal.classList.remove('hidden');
-
-      this.resetGame();
-      if (!this.isLoopRunning) {
-        this.isLoopRunning = true;
-        requestAnimationFrame(() => this.gameLoop());
-      }
-    }
-  }
-
-  updateCameraStatus(text, isError) {
-    const chip = this.ui.cameraStatus;
-    const led = chip.querySelector('.indicator-led');
-    const label = chip.querySelector('.indicator-label');
-    label.textContent = text;
-    if (isError) {
-      led.className = 'indicator-led error';
-    } else if (text.includes('NONAKTIF')) {
-      led.className = 'indicator-led off';
-    } else {
-      led.className = 'indicator-led';
-    }
-  }
-
-  showLoading(show, message = '') {
-    if (show) {
-      this.ui.loaderStatus.textContent = message;
-      this.ui.loadingOverlay.classList.remove('hidden');
-    } else {
-      this.ui.loadingOverlay.classList.add('hidden');
-    }
-  }
-
-  // ============================================================================
-  // 6. GESTURE DETECTION (SATU JARI TELUNJUK & PEMBAGIAN SPLIT SCREEN)
-  // ============================================================================
-  /**
-   * Hanya telunjuk yang direntangkan; jari lain dilipat. Koordinat kontrol
-   * memakai ujung telunjuk (landmark 8), sehingga bola lebih presisi.
-   */
-  /**
-   * Perbandingan berbasis ukuran telapak, jadi tetap berfungsi saat tangan dekat
-   * maupun jauh dari kamera. Tidak bergantung pada arah tangan di layar.
-   */
-  isSingleIndexFingerGesture(landmarks) {
-    const wrist = landmarks[0];
-    const palmBase = landmarks[9];
-
-    // Jarak acuan telapak tangan (skala independen).
-    const palmDist = Math.hypot(palmBase.x - wrist.x, palmBase.y - wrist.y);
-    if (palmDist < 0.01) return false;
-
-    const distanceToWrist = (point) => Math.hypot(
-      landmarks[point].x - wrist.x,
-      landmarks[point].y - wrist.y
-    );
-    const isFingerExtended = (tip, pip) => (
-      distanceToWrist(tip) > distanceToWrist(pip) + palmDist * 0.28 &&
-      distanceToWrist(tip) > palmDist * 1.45
-    );
-
-    const indexExtended = isFingerExtended(8, 6);
-    const middleExtended = isFingerExtended(12, 10);
-    const ringExtended = isFingerExtended(16, 14);
-    const pinkyExtended = isFingerExtended(20, 18);
-
-    // Jempol yang sedikit terbuka dibiarkan agar pose telunjuk terasa nyaman.
-    return indexExtended && !middleExtended && !ringExtended && !pinkyExtended;
-  }
-
-  /**
-   * Callback MediaPipe Hands Results:
-   * - Memetakan koordinat mirror layar (1.0 - landmark.x)
-   * - Memisahkan tangan di X < 0.5 (Tim Kiri) dan X >= 0.5 (Tim Kanan)
-   */
-  onHandResults(results) {
-    let p1Found = false;
-    let p2Found = false;
-
-    if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
-      const bounds = this.getVideoRenderBounds();
-
-      for (let i = 0; i < results.multiHandLandmarks.length; i++) {
-        const landmarks = results.multiHandLandmarks[i];
-
-        // Telapak menentukan sisi tim; ujung telunjuk menentukan posisi bola.
-        const palmCenter = landmarks[9];
-        const indexTip = landmarks[8];
-
-        // MIRROR FEED KOORDINAT:
-        // Karena webcam dimirror dengan CSS transform: scaleX(-1), posisi layar adalah (1.0 - x)
-        const teamScreenX = bounds.offsetX + (1.0 - palmCenter.x) * bounds.renderW;
-        const screenPixelX = bounds.offsetX + (1.0 - indexTip.x) * bounds.renderW;
-        const screenPixelY = bounds.offsetY + indexTip.y * bounds.renderH;
-
-        const isSingleIndex = this.isSingleIndexFingerGesture(landmarks);
-
-        // Pembagian Sumbu X Layar:
-        // Kiri (< 0.5 lebar canvas) mengendalikan Tim 1
-        // Kanan (>= 0.5 lebar canvas) mengendalikan Tim 2
-        if (teamScreenX < this.canvas.width / 2) {
-          if (!p1Found) {
-            p1Found = true;
-            this.player1.isActive = isSingleIndex && !this.teamLocked[1];
-            this.player1.rawX = screenPixelX;
-            this.player1.rawY = screenPixelY;
-          }
-        } else {
-          if (!p2Found) {
-            p2Found = true;
-            this.player2.isActive = isSingleIndex && !this.teamLocked[2];
-            this.player2.rawX = screenPixelX;
-            this.player2.rawY = screenPixelY;
-          }
-        }
-      }
-    }
-
-    if (!p1Found) {
-      this.player1.isActive = false;
-    }
-    if (!p2Found) {
-      this.player2.isActive = false;
-    }
-
-    this.updateHUDStatus();
-  }
-
-  // Update status badge di HUD (ANGKAT TANGAN & DORONG vs MENDORONG BOLA vs MELAYANG TURUN vs TERKUNCI)
-  updateHUDStatus() {
-    // Tim 1
-    if (this.teamLocked[1]) {
-      this.ui.statusP1.className = 'hand-status status-locked';
-      this.ui.statusP1.innerHTML = '<span class="status-icon">🔒</span><span class="status-text">TERKUNCI (SALAH)</span>';
-    } else if (this.player1.isActive) {
-      this.ui.statusP1.className = 'hand-status status-ready';
-      this.ui.statusP1.innerHTML = '<span class="status-icon">⚡</span><span class="status-text">MENDORONG BOLA</span>';
-    } else if (this.player1.y < this.player1.homeY - 20) {
-      this.ui.statusP1.className = 'hand-status status-falling';
-      this.ui.statusP1.innerHTML = '<span class="status-icon">🍃</span><span class="status-text">MELAYANG TURUN...</span>';
-    } else {
-      this.ui.statusP1.className = 'hand-status status-waiting';
-      this.ui.statusP1.innerHTML = '<span class="status-icon">☝️</span><span class="status-text">ANGKAT 1 JARI</span>';
-    }
-
-    // Tim 2
-    if (this.teamLocked[2]) {
-      this.ui.statusP2.className = 'hand-status status-locked';
-      this.ui.statusP2.innerHTML = '<span class="status-icon">🔒</span><span class="status-text">TERKUNCI (SALAH)</span>';
-    } else if (this.player2.isActive) {
-      this.ui.statusP2.className = 'hand-status status-ready';
-      this.ui.statusP2.innerHTML = '<span class="status-icon">⚡</span><span class="status-text">MENDORONG BOLA</span>';
-    } else if (this.player2.y < this.player2.homeY - 20) {
-      this.ui.statusP2.className = 'hand-status status-falling';
-      this.ui.statusP2.innerHTML = '<span class="status-icon">🍃</span><span class="status-text">MELAYANG TURUN...</span>';
-    } else {
-      this.ui.statusP2.className = 'hand-status status-waiting';
-      this.ui.statusP2.innerHTML = '<span class="status-icon">☝️</span><span class="status-text">ANGKAT 1 JARI</span>';
-    }
-  }
-
-  // ============================================================================
-  // 7. SIKLUS PERMAINAN & BANK SOAL
-  // ============================================================================
-  resetPlayerBalls() {
-    this.player1.isControlled = false;
-    this.player1.vx = 0;
-    this.player1.vy = 0;
-    this.player1.x = this.player1.homeX || (this.canvas.width * 0.25);
-    this.player1.y = this.player1.homeY || (this.canvas.height * 0.88);
-
-    this.player2.isControlled = false;
-    this.player2.vx = 0;
-    this.player2.vy = 0;
-    this.player2.x = this.player2.homeX || (this.canvas.width * 0.75);
-    this.player2.y = this.player2.homeY || (this.canvas.height * 0.88);
-  }
-
-  resetGame() {
-    this.scoreP1 = 0;
-    this.scoreP2 = 0;
-    this.currentQuestionIndex = 0;
-    this.isPlaying = true;
-    this.roundEnded = false;
-    this.teamLocked = { 1: false, 2: false };
-
-    // Sembunyikan lock overlay & modal reset
-    this.ui.lockOverlayP1.classList.add('hidden');
-    this.ui.lockOverlayP2.classList.add('hidden');
-    if (this.ui.resetModal) this.ui.resetModal.classList.add('hidden');
-
-    this.resetPlayerBalls();
-    this.updateScoreUI();
-    this.loadQuestion(this.currentQuestionIndex);
-  }
-
-  // Kembali ke Halaman Depan / Awal (Welcome Screen)
-  returnToHome() {
-    this.isPlaying = false;
-    this.roundEnded = false;
-    this.teamLocked = { 1: false, 2: false };
+    this.video = document.querySelector('#camera');
+    this.questions = QUESTIONS;
+    this.questionIndex = 0;
+    this.scores = [0, 0];
     this.balls = [];
-
-    // Matikan hardware kamera webcam (lampu LED kamera laptop/webcam padam)
-    this.stopCamera();
-
-    // Reset status aktif tangan & posisi bola ke standby dasar
-    this.player1.isActive = false;
-    this.player2.isActive = false;
-    this.resetPlayerBalls();
-
-    // Reset data skor & soal
-    this.scoreP1 = 0;
-    this.scoreP2 = 0;
-    this.currentQuestionIndex = 0;
-    this.updateScoreUI();
-
-    // Sembunyikan semua modal & overlay permainan
-    this.ui.lockOverlayP1.classList.add('hidden');
-    this.ui.lockOverlayP2.classList.add('hidden');
-    this.hideRoundBanner();
-    this.ui.gameoverModal.classList.add('hidden');
-    if (this.ui.resetModal) this.ui.resetModal.classList.add('hidden');
-
-    // Tampilkan kembali modal halaman awal (Welcome Screen)
-    this.ui.startModal.classList.remove('hidden');
-
-    // Reset teks soal & status HUD
-    this.ui.roundBadge.textContent = 'SIAP BERTANDING';
-    this.ui.questionText.textContent = 'Klik "Mulai Permainan" untuk memulai kuis.';
-    this.updateHUDStatus();
-
-    // Bersihkan canvas
-    this.ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
+    this.roundEnded = false;
+    this.locked = [false, false];
+    this.lastTime = performance.now();
+    this.trackerReady = false;
+    this.trackerBusy = false;
+    this.tracker = null;
+    this.mainThreadDetector = null;
+    this.sound = new Sound();
+    this.isCameraPaused = false;
+    this.aiCanvas = document.createElement('canvas');
+    this.aiCanvas.width = 384;
+    this.aiCanvas.height = 216;
+    this.aiCtx = this.aiCanvas.getContext('2d', { willReadFrequently: true });
+    this.players = [this.createPlayer(1), this.createPlayer(2)];
+    this.ui = {
+      start: document.querySelector('#start'), startButton: document.querySelector('#start-button'),
+      question: document.querySelector('#question'), round: document.querySelector('#round'),
+      scores: [document.querySelector('#score-1'), document.querySelector('#score-2')],
+      states: [document.querySelector('#state-1'), document.querySelector('#state-2')],
+      locks: [document.querySelector('#lock-1'), document.querySelector('#lock-2')],
+      status: document.querySelector('#camera-status'), message: document.querySelector('#message'),
+      messageKicker: document.querySelector('#message-kicker'), messageTitle: document.querySelector('#message-title'),
+      messageDetail: document.querySelector('#message-detail'), messageButton: document.querySelector('#message-button'),
+      resetButton: document.querySelector('#reset-button'), resetModal: document.querySelector('#reset-modal'),
+      cancelReset: document.querySelector('#cancel-reset'), confirmReset: document.querySelector('#confirm-reset')
+    };
+    this.resize();
+    addEventListener('resize', () => this.resize());
+    document.querySelector('#fullscreen').addEventListener('click', () => this.fullscreen());
+    if (this.ui.resetButton) {
+      this.ui.resetButton.addEventListener('click', () => {
+        this.pauseCamera();
+        this.ui.resetModal.classList.remove('hidden');
+      });
+    }
+    if (this.ui.cancelReset) {
+      this.ui.cancelReset.addEventListener('click', () => {
+        this.ui.resetModal.classList.add('hidden');
+        this.resumeCamera();
+      });
+    }
+    if (this.ui.confirmReset) {
+      this.ui.confirmReset.addEventListener('click', () => {
+        this.ui.resetModal.classList.add('hidden');
+        this.ui.message.classList.add('hidden');
+        this.resumeCamera();
+        this.scores = [0, 0];
+        this.startRound(0);
+      });
+    }
+    this.ui.startButton.addEventListener('click', () => this.start());
+    this.ui.messageButton.addEventListener('click', () => {
+      this.scores = [0, 0];
+      this.ui.message.classList.add('hidden');
+      this.startRound(0);
+    });
+    requestAnimationFrame((time) => this.loop(time));
   }
 
-  updateScoreUI() {
-    this.ui.scoreP1.textContent = this.scoreP1;
-    this.ui.scoreP2.textContent = this.scoreP2;
+  createPlayer(team) { return { team, x: 0, y: 0, targetX: 0, targetY: 0, radius: 37, active: false, controlled: false, lastSeen: 0, lastGesture: 0, homeX: 0, homeY: 0 }; }
+
+  resize() {
+    const ratio = innerWidth / innerHeight;
+    let w = innerWidth; let h = innerHeight;
+    if (w > 1600 || h > 900) { if (ratio >= 16 / 9) { w = 1600; h = Math.round(w / ratio); } else { h = 900; w = Math.round(h * ratio); } }
+    this.canvas.width = Math.max(1, w); this.canvas.height = Math.max(1, h);
+    this.players.forEach((player) => {
+      player.homeX = w * (player.team === 1 ? .25 : .75);
+      player.homeY = h * 0.22;
+      if (!player.x) { player.x = player.homeX; player.y = player.homeY; }
+    });
   }
 
-  loadQuestion(index) {
-    if (index >= this.questions.length) {
-      this.endGame();
+  pauseCamera() {
+    this.isCameraPaused = true;
+    if (this.video && this.video.srcObject) {
+      this.video.srcObject.getVideoTracks().forEach((track) => {
+        track.enabled = false;
+      });
+      this.video.pause();
+    }
+    this.video.classList.add('camera-off');
+    this.setStatus('● KAMERA DINONAKTIFKAN SEMENTARA');
+  }
+
+  resumeCamera() {
+    this.isCameraPaused = false;
+    this.video.classList.remove('camera-off');
+    if (this.video && this.video.srcObject) {
+      this.video.srcObject.getVideoTracks().forEach((track) => {
+        track.enabled = true;
+      });
+      this.video.play().catch(() => {});
+    }
+    this.setStatus(`● KAMERA ${this.video.videoWidth || 1280}×${this.video.videoHeight || 720} • AI AKTIF`, false, true);
+  }
+
+  async start() {
+    this.ui.startButton.disabled = true;
+    this.ui.startButton.textContent = 'MENYIAPKAN…';
+    try {
+      this.isCameraPaused = false;
+      this.video.classList.remove('camera-off');
+      await this.startCamera();
+      this.ui.start.classList.add('hidden');
+      this.startRound(0);
+      if (this.captureTimer) clearInterval(this.captureTimer);
+      this.captureTimer = setInterval(() => this.captureFrame(), 40);
+      this.startTrackingWithFallback();
+    } catch (error) {
+      this.setStatus(error.message || 'KAMERA GAGAL — periksa izin kamera', true);
+      this.ui.startButton.disabled = false;
+      this.ui.startButton.textContent = 'COBA LAGI';
+    }
+  }
+
+  async startTrackingWithFallback() {
+    if (this.trackerReady) {
+      this.setStatus(`● KAMERA ${this.video.videoWidth || 1280}×${this.video.videoHeight || 720} • AI AKTIF`, false, true);
       return;
     }
+    try {
+      await this.startTracker();
+      this.setStatus(`● KAMERA ${this.video.videoWidth}×${this.video.videoHeight} • AI AKTIF`, false, true);
+    } catch (workerError) {
+      console.warn('Worker pelacak tidak tersedia; beralih ke mode kompatibilitas.', workerError);
+      this.setStatus('● MODE KOMPATIBILITAS AI', false, true);
+      try {
+        await this.startMainThreadTracker();
+        this.setStatus(`● KAMERA ${this.video.videoWidth}×${this.video.videoHeight} • AI KOMPATIBEL`, false, true);
+      } catch (fallbackError) {
+        console.error('Pelacak tangan gagal dimuat.', fallbackError);
+        this.setStatus('● AI GAGAL — PERIKSA KONEKSI INTERNET', true);
+      }
+    }
+  }
 
-    const currentQ = this.questions[index];
+  async startCamera() {
+    this.setStatus('● MENYAMBUNGKAN KAMERA');
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: false, video: { width: { ideal: 1280 }, height: { ideal: 720 }, frameRate: { ideal: 30, max: 30 } } });
+    this.video.srcObject = stream;
+    await new Promise((resolve) => this.video.addEventListener('loadedmetadata', resolve, { once: true }));
+    await this.video.play();
+    this.setStatus(`● KAMERA ${this.video.videoWidth}×${this.video.videoHeight}`, false, true);
+  }
+
+  startTracker() {
+    return new Promise((resolve, reject) => {
+      this.tracker = new Worker('hand-worker.js', { type: 'module' });
+      this.tracker.onmessage = ({ data }) => {
+        if (data.type === 'ready') { this.trackerReady = true; resolve(); }
+        if (data.type === 'result') { this.trackerBusy = false; this.readHands(data.landmarks); }
+        if (data.type === 'error') { this.trackerBusy = false; reject(new Error(data.message)); }
+      };
+      this.tracker.onerror = () => reject(new Error('Browser IFP tidak mendukung pelacak tangan modern.'));
+      this.tracker.postMessage({ type: 'init' });
+    });
+  }
+
+  async startMainThreadTracker() {
+    const { FilesetResolver, HandLandmarker } = await import(VISION_BUNDLE);
+    const vision = await FilesetResolver.forVisionTasks(VISION_WASM);
+    this.mainThreadDetector = await HandLandmarker.createFromOptions(vision, {
+      baseOptions: { modelAssetPath: HAND_MODEL },
+      runningMode: 'VIDEO',
+      numHands: 2,
+      minHandDetectionConfidence: 0.40,
+      minHandPresenceConfidence: 0.40,
+      minTrackingConfidence: 0.45
+    });
+    this.trackerReady = true;
+  }
+
+  async captureFrame() {
+    if (this.isCameraPaused || !this.trackerReady || this.trackerBusy || this.video.readyState < 2 || document.hidden) return;
+    this.trackerBusy = true;
+    try {
+      if (this.mainThreadDetector) {
+        this.aiCtx.drawImage(this.video, 0, 0, this.aiCanvas.width, this.aiCanvas.height);
+        const result = this.mainThreadDetector.detectForVideo(this.aiCanvas, performance.now());
+        this.readHands(result.landmarks || []);
+        this.trackerBusy = false;
+        return;
+      }
+      const frame = await createImageBitmap(this.video, { resizeWidth: 384, resizeHeight: 216, resizeQuality: 'medium' });
+      this.tracker.postMessage({ type: 'frame', frame, timestamp: performance.now() }, [frame]);
+    } catch (error) {
+      console.warn('Frame pelacak dilewati.', error);
+      this.trackerBusy = false;
+    }
+  }
+
+  readHands(hands) {
+    const found = [false, false]; const bounds = this.videoBounds();
+    const now = performance.now();
+    for (const landmarks of hands) {
+      const palm = landmarks[9];
+      const team = (1 - palm.x) < .5 ? 0 : 1;
+      if (found[team]) continue;
+      found[team] = true;
+      const player = this.players[team];
+      const palmGesture = this.isOpenPalm(landmarks);
+      if (palmGesture && !this.locked[team]) {
+        player.active = true;
+        player.lastGesture = now;
+      } else if (now - player.lastGesture > 240) {
+        player.active = false;
+      }
+      player.lastSeen = now;
+      player.targetX = bounds.x + (1 - palm.x) * bounds.w;
+      player.targetY = bounds.y + palm.y * bounds.h;
+    }
+    // Pertahankan kontrol maksimal 240 ms saat tangan bergerak cepat
+    found.forEach((seen, index) => {
+      const player = this.players[index];
+      if (!seen && now - player.lastGesture > 240) player.active = false;
+    });
+  }
+
+  isOpenPalm(points) {
+    const wrist = points[0];
+    // Jarak 3D Euclidean terhadap pergelangan tangan
+    const dist3D = (i) => Math.hypot(
+      points[i].x - wrist.x,
+      points[i].y - wrist.y,
+      (points[i].z || 0) - (wrist.z || 0)
+    );
+    const scale = dist3D(9); // Skala telapak (wrist ke pangkal jari tengah)
+    if (scale < .01) return false;
+
+    // Periksa jari yang terentang menjauhi sendi PIP dan telapak
+    const indexOpen = dist3D(8) > dist3D(6) * 1.05 && dist3D(8) > scale * 1.05;
+    const middleOpen = dist3D(12) > dist3D(10) * 1.05 && dist3D(12) > scale * 1.05;
+    const ringOpen = dist3D(16) > dist3D(14) * 1.05 && dist3D(16) > scale * 1.05;
+    const pinkyOpen = dist3D(20) > dist3D(18) * 1.05 && dist3D(20) > scale * 0.95;
+
+    let openFingers = 0;
+    if (indexOpen) openFingers++;
+    if (middleOpen) openFingers++;
+    if (ringOpen) openFingers++;
+    if (pinkyOpen) openFingers++;
+
+    // Telapak tangan aktif jika minimal 3 jari terentang terbuka
+    return openFingers >= 3;
+  }
+
+  videoBounds() {
+    const w = this.canvas.width, h = this.canvas.height;
+    const sourceRatio = (this.video.videoWidth || 16) / (this.video.videoHeight || 9);
+    const targetRatio = w / h;
+    if (targetRatio > sourceRatio) { const rh = w / sourceRatio; return { x: 0, y: (h - rh) / 2, w, h: rh }; }
+    const rw = h * sourceRatio; return { x: (w - rw) / 2, y: 0, w: rw, h };
+  }
+
+  startRound(index) {
+    if (index >= this.questions.length) return this.finishGame();
+    this.questionIndex = index;
     this.roundEnded = false;
-    this.teamLocked = { 1: false, 2: false };
-
-    // Reset bola pemain standby di posisi dasar bawah untuk soal baru
-    this.resetPlayerBalls();
-
-    // Buka kembali lock overlay kedua tim
-    this.ui.lockOverlayP1.classList.add('hidden');
-    this.ui.lockOverlayP2.classList.add('hidden');
-
-    // Perbarui HUD Soal
-    this.ui.roundBadge.textContent = `SOAL ${index + 1} / ${this.questions.length}`;
-    this.ui.questionText.textContent = currentQ.question;
-    this.updateHUDStatus();
-
-    // Spawn 4 Bola Jawaban untuk Tim 1 (Kiri) dan 4 Bola untuk Tim 2 (Kanan)
-    this.spawnAnswerBalls(currentQ);
-  }
-
-  spawnAnswerBalls(questionData) {
+    this.locked = [false, false];
     this.balls = [];
-    const labels = ['A', 'B', 'C', 'D'];
-    const halfWidth = this.canvas.width / 2;
-
-    // 4 Bola untuk Tim 1 (Arena Kiri)
-    for (let i = 0; i < 4; i++) {
-      const startX = 70 + (i * (halfWidth - 140)) / 3;
-      const startY = -60 - i * 65; // Staggered vertikal agar turun bertahap
-      const isCorrect = i === questionData.correctIndex;
-      this.balls.push(
-        new AnswerBall(1, i, labels[i], questionData.options[i], isCorrect, this.canvas.width, this.canvas.height, startX, startY)
-      );
-    }
-
-    // 4 Bola untuk Tim 2 (Arena Kanan)
-    for (let i = 0; i < 4; i++) {
-      const startX = halfWidth + 70 + (i * (halfWidth - 140)) / 3;
-      const startY = -60 - i * 65;
-      const isCorrect = i === questionData.correctIndex;
-      this.balls.push(
-        new AnswerBall(2, i, labels[i], questionData.options[i], isCorrect, this.canvas.width, this.canvas.height, startX, startY)
-      );
-    }
-  }
-
-  // ============================================================================
-  // 8. LOGIKA BENTURAN (CIRCLE-CIRCLE COLLISION) & PENGUNCIAN TIM
-  // ============================================================================
-  // Repulsi elastis antar bola agar tidak saling bertumpuk
-  resolveBallCollisions() {
-    for (let i = 0; i < this.balls.length; i++) {
-      for (let j = i + 1; j < this.balls.length; j++) {
-        const b1 = this.balls[i];
-        const b2 = this.balls[j];
-        if (b1.team !== b2.team) continue;
-
-        const dx = b2.x - b1.x;
-        const dy = b2.y - b1.y;
-        const dist = Math.hypot(dx, dy);
-        const minDist = b1.radius + b2.radius + 6;
-
-        if (dist < minDist && dist > 0.001) {
-          const nx = dx / dist;
-          const ny = dy / dist;
-          const overlap = (minDist - dist) * 0.5;
-
-          b1.x -= nx * overlap;
-          b1.y -= ny * overlap;
-          b2.x += nx * overlap;
-          b2.y += ny * overlap;
-
-          // Tukar sedikit impuls
-          const kx = b1.vx - b2.vx;
-          const ky = b1.vy - b2.vy;
-          const p = (nx * kx + ny * ky) * 0.5;
-
-          b1.vx -= p * nx;
-          b1.vy -= p * ny;
-          b2.vx += p * nx;
-          b2.vy += p * ny;
-        }
-      }
-    }
-  }
-
-  checkPlayerCollisions() {
-    if (this.roundEnded || !this.isPlaying) return;
-
-    const players = [this.player1, this.player2];
-
-    for (const player of players) {
-      // Lewati jika tim sedang terkunci
-      if (this.teamLocked[player.team]) continue;
-
-      // PENTING: Bola kuning hanya bisa memilih jawaban jika berada di area atas (di luar zona dasar 80%)
-      if (player.y >= this.canvas.height * 0.80) continue;
-
-      for (let i = 0; i < this.balls.length; i++) {
-        const ball = this.balls[i];
-
-        // Pastikan pemain hanya berinteraksi dengan bola di arena timnya
-        if (ball.team !== player.team) continue;
-
-        const dx = ball.x - player.x;
-        const dy = ball.y - player.y;
-        const dist = Math.hypot(dx, dy);
-        const minDist = player.radius + ball.radius;
-
-        // Terjadi kontak / benturan lingkaran
-        if (dist < minDist && dist > 0.001) {
-          // Physics impulse dorongan
-          const nx = dx / dist;
-          const ny = dy / dist;
-          const overlap = minDist - dist;
-
-          ball.x += nx * overlap;
-          ball.y += ny * overlap;
-
-          // Berikan impuls kecepatan dorong
-          ball.vx += nx * 6.5;
-          ball.vy += ny * 6.5;
-
-          // Suara dorongan pop (throttled)
-          const now = Date.now();
-          if (now - this.lastBounceSoundTime > 120) {
-            this.sound.playBounce();
-            this.lastBounceSoundTime = now;
-          }
-
-          // Validasi Jawaban
-          this.handleAnswerHit(player.team, ball);
-          break;
-        }
-      }
-
-      if (this.roundEnded) break;
-    }
-  }
-
-  // Kunci hanya tim yang salah menjawab
-  lockTeam(team) {
-    this.teamLocked[team] = true;
-
-    if (team === 1) {
-      this.player1.isActive = false;
-      this.player1.isControlled = false;
-      this.ui.lockOverlayP1.classList.remove('hidden');
-    } else {
-      this.player2.isActive = false;
-      this.player2.isControlled = false;
-      this.ui.lockOverlayP2.classList.remove('hidden');
-    }
-
-    // Redupkan bola di sisi tim yang terkunci
-    for (let i = 0; i < this.balls.length; i++) {
-      if (this.balls[i].team === team) {
-        this.balls[i].isLocked = true;
-      }
-    }
-
-    this.updateHUDStatus();
-  }
-
-  handleAnswerHit(team, ball) {
-    const currentQ = this.questions[this.currentQuestionIndex];
-    const correctAnswerText = currentQ.options[currentQ.correctIndex];
-
-    if (ball.isCorrect) {
-      // JAWABAN BENAR!
-      this.roundEnded = true;
-      this.teamLocked[1] = true;
-      this.teamLocked[2] = true;
-
-      this.sound.playCorrect();
-      this.particles.explodeCorrect(ball.x, ball.y);
-
-      // Efek Confetti di sisi tim pemenang
-      if (typeof confetti === 'function') {
-        confetti({
-          particleCount: 85,
-          spread: 70,
-          origin: {
-            x: team === 1 ? 0.25 : 0.75,
-            y: 0.5
-          }
-        });
-      }
-
-      // Tambahkan Skor (+10)
-      if (team === 1) this.scoreP1 += 10;
-      else this.scoreP2 += 10;
-      this.updateScoreUI();
-
-      // Tampilkan Banner Kemenangan Ronde
-      const teamName = team === 1 ? 'TIM 1 (BIRU)' : 'TIM 2 (ORANYE)';
-      this.showRoundBanner(
-        team,
-        `${teamName} BENAR!`,
-        `Hebat! +10 Poin berhasil diraih!`,
-        `Kunci Jawaban: ${correctAnswerText}`
-      );
-
-      // Auto-advance setelah 2.5 detik
-      setTimeout(() => {
-        this.hideRoundBanner();
-        this.balls = []; // Bersihkan semua bola tersisa
-        this.currentQuestionIndex++;
-        this.loadQuestion(this.currentQuestionIndex);
-      }, 2500);
-    } else {
-      // JAWABAN SALAH! Kunci HANYA tim ini!
-      this.sound.playWrong();
-      ball.isShaking = true;
-      ball.shakeTimer = 35;
-      this.particles.explodeWrong(ball.x, ball.y);
-
-      // Kunci layar tim yang salah
-      this.lockTeam(team);
-
-      const opponentTeam = team === 1 ? 2 : 1;
-      const opponentName = opponentTeam === 1 ? 'Tim 1 (Biru)' : 'Tim 2 (Oranye)';
-
-      // Cek apakah kedua tim sekarang sudah terkunci (gagal semua)
-      if (this.teamLocked[opponentTeam]) {
-        // KEDUA TIM SALAH! Ronde selesai tanpa pemenang
-        this.roundEnded = true;
-        this.showRoundBanner(
-          0,
-          'KEDUA TIM SALAH!',
-          'Kedua tim gagal menjawab benar pada ronde ini.',
-          `Kunci Jawaban: ${correctAnswerText}`
-        );
-
-        setTimeout(() => {
-          this.hideRoundBanner();
-          this.balls = [];
-          this.currentQuestionIndex++;
-          this.loadQuestion(this.currentQuestionIndex);
-        }, 2500);
-      } else {
-        // TIM LAWAN MASIH DAPAT KESEMPATAN!
-        // Jangan selesaikan ronde, biarkan tim lawan melanjutkan
-        console.log(`Tim ${team} salah. ${opponentName} masih memiliki kesempatan menjawab!`);
-      }
-    }
-  }
-
-  showRoundBanner(winnerTeam, title, detail, answer) {
-    this.ui.bannerTitle.textContent = title;
-    this.ui.bannerDetail.textContent = detail;
-    this.ui.bannerAnswer.textContent = answer;
-
-    if (winnerTeam === 1) {
-      this.ui.bannerCard.className = 'banner-card team1-win';
-      this.ui.bannerBadge.textContent = 'RONDE SELESAI';
-      this.ui.bannerBadge.style.color = '#00f0ff';
-    } else if (winnerTeam === 2) {
-      this.ui.bannerCard.className = 'banner-card team2-win';
-      this.ui.bannerBadge.textContent = 'RONDE SELESAI';
-      this.ui.bannerBadge.style.color = '#ff0077';
-    } else {
-      this.ui.bannerCard.className = 'banner-card both-wrong';
-      this.ui.bannerBadge.textContent = 'RONDE BERAKHIR';
-      this.ui.bannerBadge.style.color = '#ff3344';
-    }
-
-    this.ui.roundBanner.classList.remove('hidden');
-
-    // Animasi Progress Bar 2.5 Detik
-    this.ui.bannerBar.style.transition = 'none';
-    this.ui.bannerBar.style.width = '100%';
-    setTimeout(() => {
-      this.ui.bannerBar.style.transition = 'width 2.4s linear';
-      this.ui.bannerBar.style.width = '0%';
-    }, 30);
-  }
-
-  hideRoundBanner() {
-    this.ui.roundBanner.classList.add('hidden');
-  }
-
-  endGame() {
-    this.isPlaying = false;
-    this.sound.playGameOver();
-
-    // Ledakan Confetti Grand Final
-    if (typeof confetti === 'function') {
-      confetti({ particleCount: 150, spread: 100, origin: { x: 0.5, y: 0.4 } });
-    }
-
-    // Tentukan Pemenang
-    let winnerText = 'PERTANDINGAN SERI!';
-    if (this.scoreP1 > this.scoreP2) {
-      winnerText = '🏆 TIM 1 (BIRU) JUARA 1!';
-    } else if (this.scoreP2 > this.scoreP1) {
-      winnerText = '🏆 TIM 2 (ORANYE) JUARA 1!';
-    }
-
-    this.ui.winnerAnnouncement.textContent = winnerText;
-    this.ui.finalScoreP1.textContent = this.scoreP1;
-    this.ui.finalScoreP2.textContent = this.scoreP2;
-    this.ui.gameoverModal.classList.remove('hidden');
-  }
-
-  // ============================================================================
-  // 9. GAME LOOP & RENDERING
-  // ============================================================================
-  gameLoop() {
-    this.update();
-    this.render();
-    requestAnimationFrame(() => this.gameLoop());
-  }
-
-  update() {
-    // -------------------------------------------------------------
-    // 1. UPDATE FISIKA BOLA KUNING TIM 1 (P1)
-    // -------------------------------------------------------------
-    if (this.player1.isActive && !this.teamLocked[1]) {
-      // Siswa sedang mendorong bola kuning!
-      this.player1.isControlled = true;
-      const targetX = this.player1.rawX;
-      const targetY = this.player1.rawY;
-
-      // Dorongan fluida mengikuti gerakan telapak tangan
-      this.player1.vx = (targetX - this.player1.x) * 0.35;
-      this.player1.vy = (targetY - this.player1.y) * 0.35;
-
-      this.player1.x += this.player1.vx;
-      this.player1.y += this.player1.vy;
-      this.particles.addHandTrail(this.player1.x, this.player1.y);
-    } else {
-      // Siswa melepas bola kuning / tidak terdeteksi:
-      // Bola kuning jatuh secara perlahan ke bawah (Slow Descent Gravity)
-      this.player1.isControlled = false;
-      this.player1.vy += 0.22; // Gravitasi lembut
-      if (this.player1.vy > 3.4) this.player1.vy = 3.4; // Kecepatan melayang turun yang anggun & santai
-      this.player1.vx *= 0.94; // Gesekan udara
-
-      this.player1.x += this.player1.vx;
-      this.player1.y += this.player1.vy;
-
-      // Perlahan kembali ke garis tengah arena Tim 1 (homeX)
-      this.player1.x += (this.player1.homeX - this.player1.x) * 0.03;
-
-      // Mendarat di dasar layar (homeY)
-      if (this.player1.y >= this.player1.homeY) {
-        this.player1.y = this.player1.homeY;
-        this.player1.vy = -this.player1.vy * 0.25; // Pantulan pegas lembut
-        if (Math.abs(this.player1.vy) < 0.2) this.player1.vy = 0;
-      }
-    }
-
-    // Batas dinding arena Tim 1 (Kiri)
-    const minX1 = this.player1.radius + 15;
-    const maxX1 = (this.canvas.width / 2) - this.player1.radius - 12;
-    this.player1.x = Math.max(minX1, Math.min(maxX1, this.player1.x));
-    this.player1.y = Math.max(this.player1.radius + 15, Math.min(this.player1.homeY, this.player1.y));
-    this.player1.pulse += 0.07;
-
-    // -------------------------------------------------------------
-    // 2. UPDATE FISIKA BOLA KUNING TIM 2 (P2)
-    // -------------------------------------------------------------
-    if (this.player2.isActive && !this.teamLocked[2]) {
-      // Siswa sedang mendorong bola kuning!
-      this.player2.isControlled = true;
-      const targetX = this.player2.rawX;
-      const targetY = this.player2.rawY;
-
-      this.player2.vx = (targetX - this.player2.x) * 0.35;
-      this.player2.vy = (targetY - this.player2.y) * 0.35;
-
-      this.player2.x += this.player2.vx;
-      this.player2.y += this.player2.vy;
-      this.particles.addHandTrail(this.player2.x, this.player2.y);
-    } else {
-      // Siswa melepas bola kuning / tidak terdeteksi
-      this.player2.isControlled = false;
-      this.player2.vy += 0.22;
-      if (this.player2.vy > 3.4) this.player2.vy = 3.4;
-      this.player2.vx *= 0.94;
-
-      this.player2.x += this.player2.vx;
-      this.player2.y += this.player2.vy;
-
-      this.player2.x += (this.player2.homeX - this.player2.x) * 0.03;
-
-      if (this.player2.y >= this.player2.homeY) {
-        this.player2.y = this.player2.homeY;
-        this.player2.vy = -this.player2.vy * 0.25;
-        if (Math.abs(this.player2.vy) < 0.2) this.player2.vy = 0;
-      }
-    }
-
-    // Batas dinding arena Tim 2 (Kanan)
-    const minX2 = (this.canvas.width / 2) + this.player2.radius + 12;
-    const maxX2 = this.canvas.width - this.player2.radius - 15;
-    this.player2.x = Math.max(minX2, Math.min(maxX2, this.player2.x));
-    this.player2.y = Math.max(this.player2.radius + 15, Math.min(this.player2.homeY, this.player2.y));
-    this.player2.pulse += 0.07;
-
-    // -------------------------------------------------------------
-    // 3. UPDATE BOLA JAWABAN & TABRAKAN
-    // -------------------------------------------------------------
-    for (let i = 0; i < this.balls.length; i++) {
-      this.balls[i].update(this.canvas.width, this.canvas.height);
-    }
-
-    this.resolveBallCollisions();
-    this.checkPlayerCollisions();
-  }
-
-  render() {
-    const w = this.canvas.width;
+    this.players.forEach((player, i) => {
+      player.active = false;
+      player.controlled = false;
+      player.x = player.homeX;
+      player.y = player.homeY;
+      this.ui.locks[i].classList.add('hidden');
+    });
+    const q = this.questions[index];
+    this.ui.question.textContent = q.question;
+    this.ui.round.textContent = `SOAL ${index + 1} / ${this.questions.length}`;
+    const half = this.canvas.width / 2;
     const h = this.canvas.height;
 
-    // Bersihkan canvas transparan
-    this.ctx.clearRect(0, 0, w, h);
-
-    // 1. Gambar Bola Jawaban
-    for (let i = 0; i < this.balls.length; i++) {
-      this.balls[i].draw(this.ctx);
+    for (let team = 1; team <= 2; team++) {
+      const teamOffset = team === 1 ? 0 : half;
+      const colWidth = (half - 160) / 3;
+      for (let i = 0; i < 4; i++) {
+        const targetX = teamOffset + 80 + i * colWidth;
+        // Posisi mengambang di area bawah - tengah layar secara selang-seling (zigzag)
+        const targetY = h * (i % 2 === 0 ? 0.56 : 0.68);
+        const startY = h + 80 + i * 45;
+        this.balls.push(new AnswerBall(team, i, q.options[i], i === q.answer, targetX, targetY, startY));
+      }
     }
-
-    // 2. Gambar Bola Kuning Pemain (Selalu tampil di layar!)
-    this.drawPlayerEnergyOrb(this.player1);
-    this.drawPlayerEnergyOrb(this.player2);
-
-    // 3. Update & Render Efek Partikel
-    this.particles.updateAndDraw(this.ctx);
+    this.updateHud();
   }
 
-  // Render Bola Kuning Energi (~38px) - Selalu tampil di layar dengan fisika dorong & jatuh
-  drawPlayerEnergyOrb(player) {
-    const x = player.x;
-    const y = player.y;
-    const baseRadius = player.radius;
-    const isLocked = this.teamLocked[player.team];
-    const isControlled = player.isControlled;
-    const isFloatingDown = !isControlled && y < player.homeY - 15;
-    const pulseOffset = Math.sin(player.pulse) * (isControlled ? 4 : 2);
-    const currentRadius = baseRadius + pulseOffset;
-
-    this.ctx.save();
-
-    // Redupkan jika tim sedang terkunci
-    if (isLocked) {
-      this.ctx.globalAlpha = 0.3;
+  loop(now) {
+    const dt = Math.min(.05, (now - this.lastTime) / 1000);
+    this.lastTime = now;
+    if (!this.isCameraPaused && this.ui.start.classList.contains('hidden')) {
+      this.update(dt);
     }
-
-    // 1. Outer Pulse Aura
-    const auraGrad = this.ctx.createRadialGradient(x, y, currentRadius * 0.4, x, y, currentRadius * 1.8);
-    if (isLocked) {
-      auraGrad.addColorStop(0, 'rgba(255, 51, 68, 0.4)');
-      auraGrad.addColorStop(1, 'rgba(255, 51, 68, 0)');
-    } else if (isControlled) {
-      auraGrad.addColorStop(0, 'rgba(255, 234, 0, 0.55)');
-      auraGrad.addColorStop(0.6, 'rgba(255, 170, 0, 0.3)');
-      auraGrad.addColorStop(1, 'rgba(255, 234, 0, 0)');
-    } else if (isFloatingDown) {
-      auraGrad.addColorStop(0, 'rgba(0, 240, 255, 0.45)');
-      auraGrad.addColorStop(0.6, 'rgba(0, 180, 255, 0.2)');
-      auraGrad.addColorStop(1, 'rgba(0, 240, 255, 0)');
-    } else {
-      // Standby di dasar layar
-      auraGrad.addColorStop(0, 'rgba(255, 234, 0, 0.35)');
-      auraGrad.addColorStop(0.6, 'rgba(255, 170, 0, 0.15)');
-      auraGrad.addColorStop(1, 'rgba(255, 234, 0, 0)');
-    }
-
-    this.ctx.fillStyle = auraGrad;
-    this.ctx.beginPath();
-    this.ctx.arc(x, y, currentRadius * 1.8, 0, Math.PI * 2);
-    this.ctx.fill();
-
-    // 2. Main Glowing Core
-    this.ctx.shadowBlur = 0;
-    const coreGrad = this.ctx.createRadialGradient(
-      x - currentRadius * 0.25,
-      y - currentRadius * 0.25,
-      currentRadius * 0.1,
-      x,
-      y,
-      currentRadius
-    );
-
-    if (isLocked) {
-      coreGrad.addColorStop(0, '#ffffff');
-      coreGrad.addColorStop(0.35, '#ff4d5a');
-      coreGrad.addColorStop(0.85, '#b3001e');
-      coreGrad.addColorStop(1, '#4a000c');
-    } else if (isControlled) {
-      coreGrad.addColorStop(0, '#ffffff');
-      coreGrad.addColorStop(0.35, '#fff176');
-      coreGrad.addColorStop(0.85, '#ffb300');
-      coreGrad.addColorStop(1, '#ff6f00');
-    } else if (isFloatingDown) {
-      coreGrad.addColorStop(0, '#ffffff');
-      coreGrad.addColorStop(0.35, '#80d8ff');
-      coreGrad.addColorStop(0.85, '#00b0ff');
-      coreGrad.addColorStop(1, '#00838f');
-    } else {
-      // Standby di dasar layar
-      coreGrad.addColorStop(0, '#ffffff');
-      coreGrad.addColorStop(0.35, '#ffea00');
-      coreGrad.addColorStop(0.85, '#ff9100');
-      coreGrad.addColorStop(1, '#e65100');
-    }
-
-    this.ctx.fillStyle = coreGrad;
-    this.ctx.beginPath();
-    this.ctx.arc(x, y, currentRadius, 0, Math.PI * 2);
-    this.ctx.fill();
-
-    // 3. Cincin Putar Energi
-    this.ctx.lineWidth = 2.5;
-    this.ctx.strokeStyle = isControlled ? '#ffffff' : (isFloatingDown ? '#00f0ff' : 'rgba(255, 255, 255, 0.7)');
-    this.ctx.beginPath();
-    this.ctx.arc(x, y, currentRadius * 0.7, 0, Math.PI * 2);
-    this.ctx.stroke();
-
-    // 4. Label atau Indikator Tangan
-    this.ctx.shadowBlur = 0;
-    this.ctx.fillStyle = '#070d1a';
-    this.ctx.font = '900 13px Orbitron, sans-serif';
-    this.ctx.textAlign = 'center';
-    this.ctx.textBaseline = 'middle';
-
-    if (isLocked) {
-      this.ctx.fillText('🔒', x, y);
-    } else if (isControlled) {
-      this.ctx.fillText(player.team === 1 ? 'P1 ⚡' : 'P2 ⚡', x, y);
-    } else if (isFloatingDown) {
-      this.ctx.fillText('🍃', x, y);
-    } else {
-      this.ctx.fillText(player.team === 1 ? 'P1' : 'P2', x, y);
-    }
-
-    // Indikator panah dorong ke atas jika bola sedang standby di dasar
-    if (!isControlled && !isLocked && y >= player.homeY - 10) {
-      this.ctx.strokeStyle = '#ffea00';
-      this.ctx.lineWidth = 2;
-      this.ctx.beginPath();
-      this.ctx.moveTo(x - 8, y - currentRadius - 8);
-      this.ctx.lineTo(x, y - currentRadius - 16);
-      this.ctx.lineTo(x + 8, y - currentRadius - 8);
-      this.ctx.stroke();
-    }
-
-    this.ctx.restore();
+    this.draw();
+    requestAnimationFrame((time) => this.loop(time));
   }
+
+  update(dt) {
+    this.players.forEach((player, i) => {
+      const controlled = player.active && !this.locked[i] && performance.now() - player.lastGesture < 260;
+      player.controlled = controlled;
+      if (controlled) {
+        const blend = 1 - Math.exp(-dt * 36);
+        player.x += (player.targetX - player.x) * blend;
+        player.y += (player.targetY - player.y) * blend;
+      }
+      // PENTING: Tanpa efek fisika gravitasi! Jika kehilangan tracking, bola jawaban tetap berada di posisinya saat itu.
+
+      const minX = i === 0 ? player.radius + 16 : this.canvas.width / 2 + player.radius + 16;
+      const maxX = i === 0 ? this.canvas.width / 2 - player.radius - 16 : this.canvas.width - player.radius - 16;
+      const minY = player.radius + 60;
+      const maxY = this.canvas.height * 0.88 - player.radius;
+      player.x = Math.max(minX, Math.min(maxX, player.x));
+      player.y = Math.max(minY, Math.min(maxY, player.y));
+    });
+    this.balls.forEach((ball) => ball.update(dt, this.canvas.width, this.canvas.height));
+    this.resolveBallCollisions();
+    if (!this.roundEnded) this.checkHits();
+    this.updateHud();
+  }
+
+  resolveBallCollisions() {
+    for (let a = 0; a < this.balls.length; a++) for (let b = a + 1; b < this.balls.length; b++) {
+      const first = this.balls[a], second = this.balls[b]; if (first.team !== second.team) continue;
+      const dx = second.x - first.x, dy = second.y - first.y, dist = Math.hypot(dx, dy), limit = first.radius + second.radius + 4;
+      if (dist && dist < limit) {
+        const nx = dx / dist, ny = dy / dist, push = (limit - dist) / 2;
+        first.x -= nx * push; first.y -= ny * push;
+        second.x += nx * push; second.y += ny * push;
+      }
+    }
+  }
+
+  checkHits() {
+    for (const player of this.players) {
+      const teamIndex = player.team - 1;
+      // Pemain harus menarik bola turun ke area bawah (melewati 35% tinggi layar) untuk menjawab
+      if (this.locked[teamIndex] || player.y < this.canvas.height * 0.35) continue;
+      const hit = this.balls.find((ball) => ball.team === player.team && ball.isReady && Math.hypot(ball.x - player.x, ball.y - player.y) < ball.radius + player.radius);
+      if (hit) { if (hit.correct) this.correct(teamIndex); else this.wrong(teamIndex, hit); return; }
+    }
+  }
+
+  correct(team) {
+    this.roundEnded = true;
+    this.scores[team] += 10;
+    this.sound.playCorrect();
+    this.showMessage('RONDE SELESAI', `TIM ${team + 1} BENAR!`, '+10 Poin berhasil diraih! Soal berikutnya segera dimulai.');
+    setTimeout(() => {
+      this.ui.message.classList.add('hidden');
+      this.startRound(this.questionIndex + 1);
+    }, 1900);
+  }
+
+  wrong(team, ball) {
+    ball.locked = true;
+    this.locked[team] = true;
+    this.balls.filter((item) => item.team === team + 1).forEach((item) => { item.locked = true; });
+    this.ui.locks[team].classList.remove('hidden');
+    this.sound.playWrong();
+    if (this.locked[0] && this.locked[1]) {
+      this.roundEnded = true;
+      const q = this.questions[this.questionIndex];
+      this.showMessage('RONDE BERAKHIR', 'KEDUA TIM SALAH', `Jawaban yang benar: ${OPTIONS[q.answer]} — ${q.options[q.answer]}`);
+      setTimeout(() => {
+        this.ui.message.classList.add('hidden');
+        this.startRound(this.questionIndex + 1);
+      }, 2200);
+    }
+  }
+
+  finishGame() {
+    const winner = this.scores[0] === this.scores[1] ? 'PERTANDINGAN SERI!' : this.scores[0] > this.scores[1] ? '🏆 TIM BIRU MENANG!' : '🏆 TIM ORANYE MENANG!';
+    this.showMessage('PERMAINAN SELESAI', winner, `Skor akhir: Biru ${this.scores[0]} — ${this.scores[1]} Oranye`, true);
+  }
+
+  showMessage(kicker, title, detail, final = false) {
+    this.ui.messageKicker.textContent = kicker;
+    this.ui.messageTitle.textContent = title;
+    this.ui.messageDetail.textContent = detail;
+    this.ui.message.classList.remove('hidden');
+    this.ui.messageButton.classList.toggle('hidden', !final);
+  }
+  updateHud() {
+    this.players.forEach((player, i) => {
+      this.ui.scores[i].textContent = this.scores[i];
+      this.ui.states[i].textContent = this.locked[i]
+        ? '🔒 TERKUNCI'
+        : player.controlled
+          ? '⚡ TARIK BOLA KE JAWABAN'
+          : '✋ ANGKAT TANGAN DI ATAS';
+    });
+  }
+  draw() { const { ctx, canvas } = this; ctx.clearRect(0, 0, canvas.width, canvas.height); this.balls.forEach((ball) => ball.draw(ctx)); this.players.forEach((player, i) => this.drawPlayer(player, this.locked[i])); }
+  drawPlayer(player, locked) {
+    const { ctx } = this, r = player.radius, x = player.x, y = player.y;
+    ctx.save();
+    ctx.globalAlpha = locked ? .26 : 1;
+    const halo = ctx.createRadialGradient(x, y, r * .25, x, y, r * 1.8);
+    halo.addColorStop(0, player.controlled ? 'rgba(255,239,80,.72)' : 'rgba(255,227,75,.38)');
+    halo.addColorStop(1, 'rgba(255,227,75,0)');
+    ctx.fillStyle = halo;
+    ctx.beginPath();
+    ctx.arc(x, y, r * 1.8, 0, Math.PI * 2);
+    ctx.fill();
+    const core = ctx.createRadialGradient(x - r*.3, y-r*.3, 2, x, y, r);
+    core.addColorStop(0,'#fff');
+    core.addColorStop(.3,'#fff79b');
+    core.addColorStop(.8,'#ffc21c');
+    core.addColorStop(1,'#d86b00');
+    ctx.fillStyle=core;
+    ctx.beginPath();
+    ctx.arc(x,y,r,0,Math.PI*2);
+    ctx.fill();
+    ctx.strokeStyle='#fff';
+    ctx.lineWidth=2;
+    ctx.stroke();
+    ctx.fillStyle='#18202b';
+    ctx.font='800 12px Oxanium,sans-serif';
+    ctx.textAlign='center';
+    ctx.textBaseline='middle';
+    ctx.fillText(locked?'🔒':`P${player.team}`,x,y);
+    if (!locked && player.y < this.canvas.height * 0.32) {
+      ctx.fillStyle = player.controlled ? 'rgba(255,239,80,0.92)' : 'rgba(255,255,255,0.65)';
+      ctx.font = '700 11px Oxanium,sans-serif';
+      ctx.fillText(player.controlled ? '▼ TARIK KE BAWAH' : '✋ BUKA TANGAN', x, y + r + 17);
+    }
+    ctx.restore();
+  }
+  setStatus(text, error = false, ready = false) { this.ui.status.textContent = text; this.ui.status.className = `camera-status${error ? ' error' : ready ? ' ready' : ''}`; }
+  fullscreen() { if (!document.fullscreenElement) document.documentElement.requestFullscreen?.(); else document.exitFullscreen?.(); }
 }
 
-// ============================================================================
-// 10. ENTRY POINT AUTO-BOOT
-// ============================================================================
-window.addEventListener('DOMContentLoaded', () => {
-  window.gameApp = new CameraQuizBattle();
-});
+new MathMotionBattle();
