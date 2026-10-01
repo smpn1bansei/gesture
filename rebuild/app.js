@@ -154,23 +154,14 @@ class MathMotionBattle {
       status: document.querySelector('#camera-status'), message: document.querySelector('#message'),
       messageKicker: document.querySelector('#message-kicker'), messageTitle: document.querySelector('#message-title'),
       messageDetail: document.querySelector('#message-detail'), messageButton: document.querySelector('#message-button'),
-      messageHomeButton: document.querySelector('#message-home-button'),
-      homeButton: document.querySelector('#home-button'),
       resetButton: document.querySelector('#reset-button'), resetModal: document.querySelector('#reset-modal'),
-      cancelReset: document.querySelector('#cancel-reset'), confirmReset: document.querySelector('#confirm-reset'),
-      toHomeBtn: document.querySelector('#to-home-btn')
+      cancelReset: document.querySelector('#cancel-reset'), confirmReset: document.querySelector('#confirm-reset')
     };
     this.resize();
     addEventListener('resize', () => this.resize());
     document.querySelector('#fullscreen').addEventListener('click', () => this.fullscreen());
     if (this.ui.resetButton) {
       this.ui.resetButton.addEventListener('click', () => {
-        this.pauseCamera();
-        this.ui.resetModal.classList.remove('hidden');
-      });
-    }
-    if (this.ui.homeButton) {
-      this.ui.homeButton.addEventListener('click', () => {
         this.pauseCamera();
         this.ui.resetModal.classList.remove('hidden');
       });
@@ -189,12 +180,6 @@ class MathMotionBattle {
         this.scores = [0, 0];
         this.startRound(0);
       });
-    }
-    if (this.ui.toHomeBtn) {
-      this.ui.toHomeBtn.addEventListener('click', () => this.goToHome());
-    }
-    if (this.ui.messageHomeButton) {
-      this.ui.messageHomeButton.addEventListener('click', () => this.goToHome());
     }
     this.ui.startButton.addEventListener('click', () => this.start());
     this.ui.messageButton.addEventListener('click', () => {
@@ -240,39 +225,6 @@ class MathMotionBattle {
       this.video.play().catch(() => {});
     }
     this.setStatus(`● KAMERA ${this.video.videoWidth || 1280}×${this.video.videoHeight || 720} • AI AKTIF`, false, true);
-  }
-
-  stopCamera() {
-    this.isCameraPaused = true;
-    if (this.captureTimer) {
-      clearInterval(this.captureTimer);
-      this.captureTimer = null;
-    }
-    if (this.video && this.video.srcObject) {
-      this.video.srcObject.getTracks().forEach((track) => track.stop());
-      this.video.srcObject = null;
-    }
-    this.video.classList.add('camera-off');
-    this.setStatus('● STANDBY — KAMERA NONAKTIF');
-  }
-
-  goToHome() {
-    this.stopCamera();
-    this.ui.resetModal.classList.add('hidden');
-    this.ui.message.classList.add('hidden');
-    this.ui.start.classList.remove('hidden');
-    this.ui.startButton.disabled = false;
-    this.ui.startButton.textContent = 'MULAI PERMAINAN';
-    this.scores = [0, 0];
-    this.roundEnded = false;
-    this.balls = [];
-    this.players.forEach((p) => {
-      p.active = false;
-      p.controlled = false;
-      p.x = p.homeX;
-      p.y = p.homeY;
-    });
-    this.updateHud();
   }
 
   async start() {
@@ -524,9 +476,6 @@ class MathMotionBattle {
     this.ui.messageDetail.textContent = detail;
     this.ui.message.classList.remove('hidden');
     this.ui.messageButton.classList.toggle('hidden', !final);
-    if (this.ui.messageHomeButton) {
-      this.ui.messageHomeButton.classList.toggle('hidden', !final);
-    }
   }
   updateHud() { this.players.forEach((player, i) => { this.ui.scores[i].textContent = this.scores[i]; this.ui.states[i].textContent = this.locked[i] ? '🔒 TERKUNCI' : player.controlled ? '⚡ MENGGERAKKAN BOLA' : '✋ BUKA TELAPAK TANGAN'; }); }
   draw() { const { ctx, canvas } = this; ctx.clearRect(0, 0, canvas.width, canvas.height); this.balls.forEach((ball) => ball.draw(ctx)); this.players.forEach((player, i) => this.drawPlayer(player, this.locked[i])); }

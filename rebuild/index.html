@@ -42,7 +42,6 @@
     <footer>
       <span id="camera-status" class="camera-status">● MENYIAPKAN KAMERA</span>
       <div class="footer-actions">
-        <button id="home-button" type="button">🏠 BERANDA</button>
         <button id="reset-button" type="button">↺ MULAI ULANG</button>
         <button id="fullscreen" type="button">⛶ LAYAR PENUH</button>
       </div>
@@ -50,13 +49,12 @@
 
     <div id="reset-modal" class="message hidden">
       <div>
-        <small>PENGATURAN PERMAINAN</small>
-        <h2>MENU PERMAINAN</h2>
-        <p>Kamera dinonaktifkan sementara. Pilih tindakan di bawah:</p>
-        <div style="display:flex; gap:12px; justify-content:center; margin-top:20px; flex-wrap:wrap;">
-          <button id="cancel-reset" type="button" style="background:#40536d;">▶ LANJUT MAIN</button>
-          <button id="confirm-reset" type="button" style="background:#e07b22;">↺ ULANGI KUIS</button>
-          <button id="to-home-btn" type="button" style="background:#1976d2;">🏠 KEMBALI KE BERANDA</button>
+        <small>KONFIRMASI</small>
+        <h2>MULAI ULANG KUIS?</h2>
+        <p>Skor dan ronde kuis akan diatur ulang dari awal.<br><small style="color:#57718e; display:block; margin-top:6px;">Kamera dinonaktifkan sementara.</small></p>
+        <div style="display:flex; gap:14px; justify-content:center; margin-top:22px;">
+          <button id="cancel-reset" type="button" style="background:#40536d; min-width:130px;">BATAL</button>
+          <button id="confirm-reset" type="button" style="background:#d83232; min-width:150px;">YA, MULAI ULANG</button>
         </div>
       </div>
     </div>
@@ -66,10 +64,7 @@
         <small id="message-kicker">RONDE SELESAI</small>
         <h2 id="message-title"></h2>
         <p id="message-detail"></p>
-        <div style="display:flex; gap:12px; justify-content:center; margin-top:20px;">
-          <button id="message-button" class="hidden" type="button">MAIN LAGI</button>
-          <button id="message-home-button" class="hidden" type="button" style="background:#1976d2;">🏠 BERANDA</button>
-        </div>
+        <button id="message-button" class="hidden" type="button">MAIN LAGI</button>
       </div>
     </div>
     <div id="start" class="start-screen"><div class="start-card">
