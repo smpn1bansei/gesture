@@ -1,0 +1,82 @@
+<!doctype html>
+<html lang="id">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Math Motion Battle</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Nunito:wght@600;700;800;900&family=Oxanium:wght@600;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <main id="game">
+    <video id="camera" autoplay muted playsinline></video>
+    <div class="camera-shade"></div>
+    <canvas id="arena" aria-label="Arena permainan matematika"></canvas>
+
+    <div class="team-wash left"></div>
+    <div class="team-wash right"></div>
+    <div class="divider"><span>VS</span></div>
+
+    <header class="hud">
+      <section class="team-card blue">
+        <span class="team-name">TIM BIRU</span>
+        <strong id="score-1">0</strong><small>POIN</small>
+        <span id="state-1" class="state">✋ BUKA TELAPAK TANGAN</span>
+      </section>
+      <section class="question-card">
+        <div class="round"><span id="round">SOAL 1 / 10</span><span>MATEMATIKA</span></div>
+        <h1 id="question">Memuat soal…</h1>
+      </section>
+      <section class="team-card orange">
+        <span class="team-name">TIM ORANYE</span>
+        <strong id="score-2">0</strong><small>POIN</small>
+        <span id="state-2" class="state">✋ BUKA TELAPAK TANGAN</span>
+      </section>
+    </header>
+
+    <aside id="lock-1" class="lock left-lock hidden"><b>🔒</b><strong>TIM BIRU TERKUNCI</strong><span>Jawaban salah</span></aside>
+    <aside id="lock-2" class="lock right-lock hidden"><b>🔒</b><strong>TIM ORANYE TERKUNCI</strong><span>Jawaban salah</span></aside>
+
+    <footer>
+      <span id="camera-status" class="camera-status">● MENYIAPKAN KAMERA</span>
+      <div class="footer-actions">
+        <button id="reset-button" type="button">↺ MULAI ULANG</button>
+        <button id="fullscreen" type="button">⛶ LAYAR PENUH</button>
+      </div>
+    </footer>
+
+    <div id="reset-modal" class="message hidden">
+      <div>
+        <small>KONFIRMASI</small>
+        <h2>MULAI ULANG KUIS?</h2>
+        <p>Skor dan ronde kuis akan diatur ulang dari awal.<br><small style="color:#57718e; display:block; margin-top:6px;">Kamera dinonaktifkan sementara.</small></p>
+        <div style="display:flex; gap:14px; justify-content:center; margin-top:22px;">
+          <button id="cancel-reset" type="button" style="background:#40536d; min-width:130px;">BATAL</button>
+          <button id="confirm-reset" type="button" style="background:#d83232; min-width:150px;">YA, MULAI ULANG</button>
+        </div>
+      </div>
+    </div>
+
+    <div id="message" class="message hidden">
+      <div>
+        <small id="message-kicker">RONDE SELESAI</small>
+        <h2 id="message-title"></h2>
+        <p id="message-detail"></p>
+        <button id="message-button" class="hidden" type="button">MAIN LAGI</button>
+      </div>
+    </div>
+    <div id="start" class="start-screen"><div class="start-card">
+      <span class="eyebrow">GAME EDUKASI • 2 KELOMPOK</span>
+      <h2>MATH<br><em>MOTION BATTLE</em></h2>
+      <p>Buka <b>telapak tangan</b> untuk menggeser bola kuning. Dorong bola ke jawaban yang benar.</p>
+      <ul><li>Tim Biru di sisi kiri kamera</li><li>Tim Oranye di sisi kanan kamera</li><li>Salah menjawab mengunci sisi tim tersebut</li></ul>
+      <button id="start-button" type="button">MULAI PERMAINAN</button>
+      <small>Gunakan Chrome/Edge terbaru dan izinkan akses kamera.</small>
+    </div></div>
+  </main>
+  <script src="questions.js"></script>
+  <script type="module" src="app.js"></script>
+</body>
+</html>
